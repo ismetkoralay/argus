@@ -12,13 +12,12 @@ linters:
     - unused
     - revive
     - gosec
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [gosec]
 
 formatters:
   enable:
     - gofmt
     - goimports
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters: [gosec]
