@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argus
+  labels: { app: argus }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: argus }
+  template:
+    metadata:
+      labels: { app: argus }
+    spec:
+      containers:
+        - name: argus
+          image: argus:latest
+          imagePullPolicy: IfNotPresent   # use locally-built image (minikube/kind)
+          ports: [{ containerPort: 8080 }]
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
