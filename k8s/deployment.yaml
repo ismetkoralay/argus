@@ -16,6 +16,8 @@ spec:
           image: argus:latest
           imagePullPolicy: IfNotPresent   # use locally-built image (minikube/kind)
           ports: [{ containerPort: 8080 }]
+          envFrom:
+            - secretRef: { name: argus-secrets }
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }
             initialDelaySeconds: 2

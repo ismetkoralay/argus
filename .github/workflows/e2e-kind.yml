@@ -12,21 +12,32 @@ jobs:
 
       - name: Build image
         uses: docker/build-push-action@v6
-        with: { context: ., push: false, load: true, tags: service:latest }
+        with: { context: ., push: false, load: true, tags: argus:latest }
 
       - name: Create kind cluster
         uses: helm/kind-action@v1
 
       - name: Load image into kind
-        run: kind load docker-image service:latest --name chart-testing
+        run: kind load docker-image argus:latest --name chart-testing
+
+      - name: Create test secret
+        # Generated fresh each run so no key material is ever committed to the
+        # repo — startup wiring only, never used against real GitHub.
+        run: |
+          openssl genrsa -out /tmp/e2e-app-key.pem 2048
+          kubectl create secret generic argus-secrets \
+            --from-literal=GITHUB_APP_ID=1 \
+            --from-literal=GITHUB_WEBHOOK_SECRET=e2e-test-secret \
+            --from-file=GITHUB_APP_PRIVATE_KEY=/tmp/e2e-app-key.pem
+          rm -f /tmp/e2e-app-key.pem
 
       - name: Deploy manifests
         run: |
           kubectl apply -k k8s/
-          kubectl rollout status deployment/service --timeout=120s
+          kubectl rollout status deployment/argus --timeout=120s
 
       - name: Smoke test /healthz
         run: |
-          kubectl port-forward svc/service 8080:8080 >/dev/null 2>&1 &
+          kubectl port-forward svc/argus 8080:8080 >/dev/null 2>&1 &
           sleep 5
           curl -fsS http://localhost:8080/healthz

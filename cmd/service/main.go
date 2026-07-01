@@ -11,17 +11,33 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ismetkoralay/argus/internal/config"
+	"github.com/ismetkoralay/argus/internal/githubapp"
 	"github.com/ismetkoralay/argus/internal/health"
+	"github.com/ismetkoralay/argus/internal/webhook"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
+	cfg, err := config.Load()
+	if err != nil {
+		logger.Error("failed to load config", "err", err)
+		os.Exit(1)
+	}
+
+	ghClient, err := githubapp.New(cfg.GitHubAppID, cfg.GitHubPrivateKeyPEM)
+	if err != nil {
+		logger.Error("failed to build github app client", "err", err)
+		os.Exit(1)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health.Handler)
+	mux.Handle("POST /webhooks/github", webhook.NewHandler(cfg.GitHubWebhookSecret, ghClient, logger))
 
 	srv := &http.Server{
-		Addr:              ":8080",
+		Addr:              ":" + cfg.Port,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
