@@ -50,6 +50,86 @@ func TestNew(t *testing.T) {
 	}
 }
 
+func TestClient_CreateReview(t *testing.T) {
+	const installationID = 42
+
+	tests := []struct {
+		name       string
+		reviewResp int
+		wantErr    bool
+	}{
+		{name: "success", reviewResp: http.StatusOK},
+		{name: "github api error", reviewResp: http.StatusForbidden, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotBody struct {
+				CommitID *string `json:"commit_id"`
+				Body     *string `json:"body"`
+				Event    *string `json:"event"`
+				Comments []struct {
+					Path *string `json:"path"`
+					Line *int    `json:"line"`
+					Body *string `json:"body"`
+				} `json:"comments"`
+			}
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == fmt.Sprintf("/app/installations/%d/access_tokens", installationID):
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"token":      "test-token",
+						"expires_at": time.Now().Add(5 * time.Minute),
+					})
+				case r.URL.Path == "/repos/octo-org/octo-repo/pulls/7/reviews":
+					_ = json.NewDecoder(r.Body).Decode(&gotBody)
+					w.WriteHeader(tt.reviewResp)
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
+				default:
+					t.Fatalf("unexpected request: %s", r.URL.Path)
+				}
+			}))
+			defer ts.Close()
+
+			client, err := New(1, testKey)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			client.baseURL = ts.URL
+
+			comments := []InlineComment{{Path: "main.go", Line: 12, Body: "finding"}}
+			err = client.CreateReview(context.Background(), installationID, "octo-org", "octo-repo", 7, "deadbeef", comments, "COMMENT", "summary")
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if gotBody.CommitID == nil || *gotBody.CommitID != "deadbeef" {
+				t.Fatalf("got commit_id %v, want deadbeef", gotBody.CommitID)
+			}
+			if gotBody.Event == nil || *gotBody.Event != "COMMENT" {
+				t.Fatalf("got event %v, want COMMENT", gotBody.Event)
+			}
+			if gotBody.Body == nil || *gotBody.Body != "summary" {
+				t.Fatalf("got body %v, want summary", gotBody.Body)
+			}
+			if len(gotBody.Comments) != 1 {
+				t.Fatalf("got %d comments, want 1", len(gotBody.Comments))
+			}
+			c := gotBody.Comments[0]
+			if c.Path == nil || *c.Path != "main.go" || c.Line == nil || *c.Line != 12 || c.Body == nil || *c.Body != "finding" {
+				t.Fatalf("got comment %+v, want path=main.go line=12 body=finding", c)
+			}
+		})
+	}
+}
+
 func TestClient_CommentOnPR(t *testing.T) {
 	const installationID = 42
 
