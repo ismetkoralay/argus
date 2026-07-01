@@ -32,19 +32,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// TEMPORARY: enables the inline-comment anchoring spike (M1 step 1).
-	// Delete this block, webhook.SpikeAnchorer, and
-	// githubapp.Client.SpikeAnchorFirstChangedLine once anchoring is
-	// confirmed against a real PR.
-	var spike webhook.SpikeAnchorer
-	if os.Getenv("ARGUS_SPIKE_ANCHOR") == "1" {
-		spike = ghClient
-		logger.Warn("anchoring spike enabled: will post a hardcoded inline comment on PR events")
-	}
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health.Handler)
-	mux.Handle("POST /webhooks/github", webhook.NewHandler(cfg.GitHubWebhookSecret, ghClient, spike, logger))
+	mux.Handle("POST /webhooks/github", webhook.NewHandler(cfg.GitHubWebhookSecret, ghClient, logger))
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
