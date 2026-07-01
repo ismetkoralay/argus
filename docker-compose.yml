@@ -5,6 +5,10 @@ services:
     environment:
       - DATABASE_URL=postgres://app:app@postgres:5432/argus?sslmode=disable
       - REDIS_URL=redis://redis:6379
+      - PORT=8080
+      - GITHUB_APP_ID=${GITHUB_APP_ID}
+      - GITHUB_APP_PRIVATE_KEY=${GITHUB_APP_PRIVATE_KEY}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
     depends_on: [postgres, redis]
 
   postgres:

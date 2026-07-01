@@ -23,6 +23,12 @@ curl localhost:8080/healthz
 make test
 ```
 
+## Webhook (M0)
+`POST /webhooks/github` verifies the `X-Hub-Signature-256` header against `GITHUB_WEBHOOK_SECRET`,
+authenticates as the GitHub App (`GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY`), and on
+`pull_request: opened` posts a static "hello PR" comment. Copy `.env.example` to `.env` (git-ignored)
+for local dev; in CI/k8s these come from Secrets, never from a committed file.
+
 ## Develop
 ```bash
 make run       # run the server (needs deps up)
@@ -35,9 +41,11 @@ make build     # compile binary
 ```bash
 minikube start
 eval "$(minikube docker-env)"      # build into minikube's docker
-docker build -t service:latest .
+docker build -t argus:latest .
+cp k8s/secret.example.yaml k8s/secret.yaml   # fill in real values, git-ignored
+kubectl apply -f k8s/secret.yaml
 kubectl apply -k k8s/
-kubectl port-forward svc/service 8080:8080
+kubectl port-forward svc/argus 8080:8080
 ```
 
 ## Demo
