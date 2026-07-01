@@ -22,21 +22,34 @@ type GithubApp interface {
 	CommentOnPR(ctx context.Context, installationID int64, owner, repo string, prNumber int, body string) error
 }
 
+// SpikeAnchorer posts one hardcoded inline comment on the first changed
+// line of a PR, to prove out inline-comment anchoring against a real PR.
+//
+// TEMPORARY: implemented by internal/githubapp.Client.SpikeAnchorFirstChangedLine.
+// Delete this interface, the spike field/trigger below, and the env-gated
+// wiring in cmd/service/main.go once the manual checkpoint confirms
+// anchoring lands on the right line.
+type SpikeAnchorer interface {
+	SpikeAnchorFirstChangedLine(ctx context.Context, installationID int64, owner, repo string, prNumber int, headSHA string) error
+}
+
 // handler verifies and routes GitHub webhook deliveries.
 type handler struct {
 	secret    []byte
 	githubApp GithubApp
+	spike     SpikeAnchorer
 	logger    *slog.Logger
 }
 
 // NewHandler builds the GitHub webhook HTTP handler. secret is the GitHub
 // App webhook secret used to verify X-Hub-Signature-256. commenter posts the
-// "hello PR" comment on pull_request:opened events.
-func NewHandler(secret []byte, githubApp GithubApp, logger *slog.Logger) http.Handler {
+// "hello PR" comment on pull_request:opened events. spike, if non-nil, is
+// called on the same events to run the anchoring spike (nil disables it).
+func NewHandler(secret []byte, githubApp GithubApp, spike SpikeAnchorer, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &handler{secret: secret, githubApp: githubApp, logger: logger}
+	return &handler{secret: secret, githubApp: githubApp, spike: spike, logger: logger}
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -69,10 +82,20 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	owner := prEvent.GetRepo().GetOwner().GetLogin()
 	repo := prEvent.GetRepo().GetName()
 	prNumber := prEvent.GetPullRequest().GetNumber()
+	headSHA := prEvent.GetPullRequest().GetHead().GetSHA()
 
 	go func() {
 		if err := h.githubApp.CommentOnPR(context.Background(), installationID, owner, repo, prNumber, helloMessage); err != nil {
 			h.logger.Error("failed to post PR comment", "err", err, "owner", owner, "repo", repo, "pr", prNumber)
 		}
 	}()
+
+	// TEMPORARY: anchoring spike, see SpikeAnchorer doc comment.
+	if h.spike != nil {
+		go func() {
+			if err := h.spike.SpikeAnchorFirstChangedLine(context.Background(), installationID, owner, repo, prNumber, headSHA); err != nil {
+				h.logger.Error("anchoring spike failed", "err", err, "owner", owner, "repo", repo, "pr", prNumber)
+			}
+		}()
+	}
 }

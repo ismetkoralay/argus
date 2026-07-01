@@ -19,7 +19,7 @@ const testSecret = "test-secret"
 const openedPRPayload = `{
   "action": "opened",
   "number": 7,
-  "pull_request": {"number": 7},
+  "pull_request": {"number": 7, "head": {"sha": "deadbeef"}},
   "repository": {"name": "octo-repo", "owner": {"login": "octo-org"}},
   "installation": {"id": 42}
 }`
@@ -54,6 +54,32 @@ func (f *fakeCommenter) CommentOnPR(_ context.Context, installationID int64, own
 	return f.err
 }
 
+// TEMPORARY: fakeSpikeAnchorer supports webhook_test.go's coverage of the
+// anchoring spike trigger. Delete alongside the spike wiring in webhook.go.
+type fakeSpikeAnchorer struct {
+	called          chan struct{}
+	err             error
+	gotInstallation int64
+	gotOwner        string
+	gotRepo         string
+	gotPRNumber     int
+	gotHeadSHA      string
+}
+
+func newFakeSpikeAnchorer() *fakeSpikeAnchorer {
+	return &fakeSpikeAnchorer{called: make(chan struct{}, 1)}
+}
+
+func (f *fakeSpikeAnchorer) SpikeAnchorFirstChangedLine(_ context.Context, installationID int64, owner, repo string, prNumber int, headSHA string) error {
+	f.gotInstallation = installationID
+	f.gotOwner = owner
+	f.gotRepo = repo
+	f.gotPRNumber = prNumber
+	f.gotHeadSHA = headSHA
+	f.called <- struct{}{}
+	return f.err
+}
+
 func sign(secret, body string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(body))
@@ -72,7 +98,7 @@ func doRequest(t *testing.T, secret, body, signature, eventType string) *httptes
 	}
 
 	commenter := newFakeCommenter()
-	h := NewHandler([]byte(secret), commenter, nil)
+	h := NewHandler([]byte(secret), commenter, nil, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -146,7 +172,7 @@ func TestHandler_EventRouting(t *testing.T) {
 			req.Header.Set(github.EventTypeHeader, tt.eventType)
 
 			commenter := newFakeCommenter()
-			h := NewHandler([]byte(testSecret), commenter, nil)
+			h := NewHandler([]byte(testSecret), commenter, nil, nil)
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
 
@@ -169,5 +195,34 @@ func TestHandler_EventRouting(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TEMPORARY: covers the anchoring spike trigger. Delete alongside the spike
+// wiring in webhook.go once the manual checkpoint confirms anchoring works.
+func TestHandler_SpikeAnchorTriggeredOnOpened(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/github", strings.NewReader(openedPRPayload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(github.SHA256SignatureHeader, sign(testSecret, openedPRPayload))
+	req.Header.Set(github.EventTypeHeader, "pull_request")
+
+	commenter := newFakeCommenter()
+	spike := newFakeSpikeAnchorer()
+	h := NewHandler([]byte(testSecret), commenter, spike, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", rec.Code)
+	}
+
+	select {
+	case <-spike.called:
+		if spike.gotInstallation != 42 || spike.gotOwner != "octo-org" ||
+			spike.gotRepo != "octo-repo" || spike.gotPRNumber != 7 || spike.gotHeadSHA != "deadbeef" {
+			t.Fatalf("spike anchorer got unexpected args: %+v", spike)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected spike anchorer to be called, timed out waiting")
 	}
 }
