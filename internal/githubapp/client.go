@@ -26,6 +26,14 @@ type InlineComment struct {
 	Body string
 }
 
+// PRFile is one file changed in a pull request, with its unified diff
+// patch. Patch is empty for binary or very large files (GitHub omits it).
+type PRFile struct {
+	Filename string
+	Patch    string
+	Status   string
+}
+
 // New builds a Client that signs requests as the GitHub App identified by
 // appID, using privateKeyPEM to mint per-installation tokens on demand.
 func New(appID int64, privateKeyPEM []byte) (*Client, error) {
@@ -67,6 +75,36 @@ func (c *Client) CommentOnPR(ctx context.Context, installationID int64, owner, r
 		return fmt.Errorf("failed to create PR comment: %w", err)
 	}
 	return nil
+}
+
+// ListPRFiles fetches every changed file (across all pages) for the given
+// pull request.
+func (c *Client) ListPRFiles(ctx context.Context, installationID int64, owner, repo string, prNumber int) ([]PRFile, error) {
+	ghClient, err := c.installationClient(installationID)
+	if err != nil {
+		return nil, err
+	}
+
+	var files []PRFile
+	opts := &github.ListOptions{PerPage: 100}
+	for {
+		page, resp, err := ghClient.PullRequests.ListFiles(ctx, owner, repo, prNumber, opts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list PR files: %w", err)
+		}
+		for _, f := range page {
+			files = append(files, PRFile{
+				Filename: f.GetFilename(),
+				Patch:    f.GetPatch(),
+				Status:   f.GetStatus(),
+			})
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return files, nil
 }
 
 // CreateReview posts a single GitHub review on the given pull request,
