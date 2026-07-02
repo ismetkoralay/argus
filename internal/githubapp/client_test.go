@@ -283,3 +283,102 @@ func TestClient_CommentOnPR(t *testing.T) {
 		})
 	}
 }
+
+func TestClient_UpsertSummaryComment(t *testing.T) {
+	const installationID = 42
+	const marker = "<!-- argus-summary -->"
+
+	t.Run("creates when no existing summary comment", func(t *testing.T) {
+		var created string
+		var listed, createCalled bool
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == fmt.Sprintf("/app/installations/%d/access_tokens", installationID):
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"token":      "test-token",
+					"expires_at": time.Now().Add(5 * time.Minute),
+				})
+			case r.Method == http.MethodGet && r.URL.Path == "/repos/octo-org/octo-repo/issues/7/comments":
+				listed = true
+				_ = json.NewEncoder(w).Encode([]map[string]any{
+					{"id": 1, "body": "an unrelated comment"},
+				})
+			case r.Method == http.MethodPost && r.URL.Path == "/repos/octo-org/octo-repo/issues/7/comments":
+				createCalled = true
+				var payload struct {
+					Body string `json:"body"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&payload)
+				created = payload.Body
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(map[string]any{"id": 2})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer ts.Close()
+
+		client, err := New(1, testKey)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		client.baseURL = ts.URL
+
+		body := marker + "\nsummary text"
+		if err := client.UpsertSummaryComment(context.Background(), installationID, "octo-org", "octo-repo", 7, body); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !listed {
+			t.Fatal("expected existing comments to be listed")
+		}
+		if !createCalled || created != body {
+			t.Fatalf("got created body %q (called=%v), want %q", created, createCalled, body)
+		}
+	})
+
+	t.Run("edits when an existing summary comment is found", func(t *testing.T) {
+		var edited string
+		var editCalled bool
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == fmt.Sprintf("/app/installations/%d/access_tokens", installationID):
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"token":      "test-token",
+					"expires_at": time.Now().Add(5 * time.Minute),
+				})
+			case r.Method == http.MethodGet && r.URL.Path == "/repos/octo-org/octo-repo/issues/7/comments":
+				_ = json.NewEncoder(w).Encode([]map[string]any{
+					{"id": 1, "body": "an unrelated comment"},
+					{"id": 5, "body": marker + "\nold summary"},
+				})
+			case r.Method == http.MethodPatch && r.URL.Path == "/repos/octo-org/octo-repo/issues/comments/5":
+				editCalled = true
+				var payload struct {
+					Body string `json:"body"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&payload)
+				edited = payload.Body
+				_ = json.NewEncoder(w).Encode(map[string]any{"id": 5})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer ts.Close()
+
+		client, err := New(1, testKey)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		client.baseURL = ts.URL
+
+		body := marker + "\nnew summary"
+		if err := client.UpsertSummaryComment(context.Background(), installationID, "octo-org", "octo-repo", 7, body); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !editCalled || edited != body {
+			t.Fatalf("got edited body %q (called=%v), want %q", edited, editCalled, body)
+		}
+	})
+}
