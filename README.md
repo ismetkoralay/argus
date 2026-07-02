@@ -23,11 +23,14 @@ curl localhost:8080/healthz
 make test
 ```
 
-## Webhook (M0)
+## Webhook (M1)
 `POST /webhooks/github` verifies the `X-Hub-Signature-256` header against `GITHUB_WEBHOOK_SECRET`,
 authenticates as the GitHub App (`GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY`), and on
-`pull_request: opened` posts a static "hello PR" comment. Copy `.env.example` to `.env` (git-ignored)
-for local dev; in CI/k8s these come from Secrets, never from a committed file.
+`pull_request: opened`/`synchronize` fetches the PR's diff, sends it to a local Ollama model
+(`OLLAMA_BASE_URL`, `OLLAMA_MODEL`; defaults to `http://localhost:11434` / `qwen2.5-coder`) for
+structured findings, and posts them as inline review comments plus a summary comment. Copy
+`.env.example` to `.env` (git-ignored) for local dev; in CI/k8s these come from Secrets, never from
+a committed file.
 
 ## Develop
 ```bash
