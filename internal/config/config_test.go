@@ -24,10 +24,12 @@ func TestLoad(t *testing.T) {
 				GitHubAppID:         123,
 				GitHubPrivateKeyPEM: []byte("pem-content"),
 				GitHubWebhookSecret: []byte("shh"),
+				OllamaBaseURL:       "http://localhost:11434",
+				OllamaModel:         "qwen2.5-coder",
 			},
 		},
 		{
-			name: "port defaults when unset",
+			name: "port and ollama settings default when unset",
 			env: map[string]string{
 				"GITHUB_APP_ID":          "123",
 				"GITHUB_APP_PRIVATE_KEY": "pem-content",
@@ -38,6 +40,26 @@ func TestLoad(t *testing.T) {
 				GitHubAppID:         123,
 				GitHubPrivateKeyPEM: []byte("pem-content"),
 				GitHubWebhookSecret: []byte("shh"),
+				OllamaBaseURL:       "http://localhost:11434",
+				OllamaModel:         "qwen2.5-coder",
+			},
+		},
+		{
+			name: "ollama settings overridden via env",
+			env: map[string]string{
+				"GITHUB_APP_ID":          "123",
+				"GITHUB_APP_PRIVATE_KEY": "pem-content",
+				"GITHUB_WEBHOOK_SECRET":  "shh",
+				"OLLAMA_BASE_URL":        "http://ollama.internal:11434",
+				"OLLAMA_MODEL":           "llama3.1",
+			},
+			want: Config{
+				Port:                "8080",
+				GitHubAppID:         123,
+				GitHubPrivateKeyPEM: []byte("pem-content"),
+				GitHubWebhookSecret: []byte("shh"),
+				OllamaBaseURL:       "http://ollama.internal:11434",
+				OllamaModel:         "llama3.1",
 			},
 		},
 		{
@@ -52,6 +74,8 @@ func TestLoad(t *testing.T) {
 				GitHubAppID:         123,
 				GitHubPrivateKeyPEM: []byte("-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----"),
 				GitHubWebhookSecret: []byte("shh"),
+				OllamaBaseURL:       "http://localhost:11434",
+				OllamaModel:         "qwen2.5-coder",
 			},
 		},
 		{
@@ -91,7 +115,7 @@ func TestLoad(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, key := range []string{"GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET", "PORT"} {
+			for _, key := range []string{"GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET", "PORT", "OLLAMA_BASE_URL", "OLLAMA_MODEL"} {
 				t.Setenv(key, tt.env[key])
 			}
 
@@ -107,7 +131,8 @@ func TestLoad(t *testing.T) {
 			}
 			if cfg.Port != tt.want.Port || cfg.GitHubAppID != tt.want.GitHubAppID ||
 				string(cfg.GitHubPrivateKeyPEM) != string(tt.want.GitHubPrivateKeyPEM) ||
-				string(cfg.GitHubWebhookSecret) != string(tt.want.GitHubWebhookSecret) {
+				string(cfg.GitHubWebhookSecret) != string(tt.want.GitHubWebhookSecret) ||
+				cfg.OllamaBaseURL != tt.want.OllamaBaseURL || cfg.OllamaModel != tt.want.OllamaModel {
 				t.Fatalf("got %+v, want %+v", cfg, tt.want)
 			}
 		})

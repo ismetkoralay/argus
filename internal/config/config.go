@@ -16,6 +16,8 @@ type Config struct {
 	GitHubAppID         int64
 	GitHubPrivateKeyPEM []byte
 	GitHubWebhookSecret []byte
+	OllamaBaseURL       string
+	OllamaModel         string
 }
 
 // Load reads configuration from the process environment, returning an error
@@ -48,11 +50,23 @@ func Load() (Config, error) {
 		port = "8080"
 	}
 
+	ollamaBaseURL := os.Getenv("OLLAMA_BASE_URL")
+	if ollamaBaseURL == "" {
+		ollamaBaseURL = "http://localhost:11434"
+	}
+
+	ollamaModel := os.Getenv("OLLAMA_MODEL")
+	if ollamaModel == "" {
+		ollamaModel = "qwen2.5-coder"
+	}
+
 	return Config{
 		Port:                port,
 		GitHubAppID:         appID,
 		GitHubPrivateKeyPEM: []byte(privateKey),
 		GitHubWebhookSecret: []byte(webhookSecret),
+		OllamaBaseURL:       ollamaBaseURL,
+		OllamaModel:         ollamaModel,
 	}, nil
 }
 
