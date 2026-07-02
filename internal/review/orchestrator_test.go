@@ -77,12 +77,15 @@ func TestOrchestrator_ReviewPR_Aggregation(t *testing.T) {
 	}
 }
 
-func TestOrchestrator_ReviewPR_SeverityFloorDropsInfo(t *testing.T) {
+func TestOrchestrator_ReviewPR_SeverityFloorKeepsEverythingAtOrAboveFloor(t *testing.T) {
 	gh := &fakeGithubClient{files: []githubapp.PRFile{patchFile("a.go", 1)}}
 	provider := &FakeProvider{Findings: []Finding{
-		{File: "a.go", Line: 1, Severity: "info", Category: "style", Message: "nit, below floor"},
-		{File: "a.go", Line: 2, Severity: "warning", Category: "style", Message: "at floor"},
+		{File: "a.go", Line: 1, Severity: "info", Category: "style", Message: "at floor"},
+		{File: "a.go", Line: 2, Severity: "warning", Category: "style", Message: "above floor"},
 	}}
+	if severityRank[severityFloor] > severityRank["info"] {
+		t.Fatalf("severityFloor is %q, but this test assumes info is at or above the floor", severityFloor)
+	}
 
 	o := NewOrchestrator(provider, gh, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
@@ -91,11 +94,8 @@ func TestOrchestrator_ReviewPR_SeverityFloorDropsInfo(t *testing.T) {
 
 	gh.mu.Lock()
 	defer gh.mu.Unlock()
-	if len(gh.reviewComments) != 1 || gh.reviewComments[0].Body == "" {
-		t.Fatalf("got %d comments, want 1 (info finding should be dropped): %+v", len(gh.reviewComments), gh.reviewComments)
-	}
-	if !strings.Contains(gh.reviewComments[0].Body, "at floor") {
-		t.Fatalf("got comment %+v, want it to be the 'at floor' finding", gh.reviewComments[0])
+	if len(gh.reviewComments) != 2 {
+		t.Fatalf("got %d comments, want 2 (both at or above the %q floor): %+v", len(gh.reviewComments), severityFloor, gh.reviewComments)
 	}
 }
 
