@@ -130,6 +130,100 @@ func TestClient_CreateReview(t *testing.T) {
 	}
 }
 
+func TestClient_ListPRFiles(t *testing.T) {
+	const installationID = 42
+
+	tests := []struct {
+		name    string
+		pages   [][]map[string]any
+		want    []PRFile
+		wantErr bool
+	}{
+		{
+			name: "single page",
+			pages: [][]map[string]any{
+				{
+					{"filename": "main.go", "patch": "@@ -1,1 +1,2 @@\n+bug", "status": "modified"},
+					{"filename": "README.md", "patch": "@@ -1,1 +1,1 @@\n-old\n+new", "status": "modified"},
+				},
+			},
+			want: []PRFile{
+				{Filename: "main.go", Patch: "@@ -1,1 +1,2 @@\n+bug", Status: "modified"},
+				{Filename: "README.md", Patch: "@@ -1,1 +1,1 @@\n-old\n+new", Status: "modified"},
+			},
+		},
+		{
+			name: "paginated across two pages",
+			pages: [][]map[string]any{
+				{{"filename": "a.go", "patch": "patch-a", "status": "added"}},
+				{{"filename": "b.go", "patch": "patch-b", "status": "added"}},
+			},
+			want: []PRFile{
+				{Filename: "a.go", Patch: "patch-a", Status: "added"},
+				{Filename: "b.go", Patch: "patch-b", Status: "added"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == fmt.Sprintf("/app/installations/%d/access_tokens", installationID):
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"token":      "test-token",
+						"expires_at": time.Now().Add(5 * time.Minute),
+					})
+				case r.URL.Path == "/repos/octo-org/octo-repo/pulls/7/files":
+					page := 1
+					if p := r.URL.Query().Get("page"); p != "" {
+						_, _ = fmt.Sscanf(p, "%d", &page)
+					}
+					idx := page - 1
+					if idx < 0 || idx >= len(tt.pages) {
+						_ = json.NewEncoder(w).Encode([]map[string]any{})
+						return
+					}
+					if idx < len(tt.pages)-1 {
+						w.Header().Set("Link", fmt.Sprintf(`<%s?page=%d>; rel="next"`, r.URL.Path, page+1))
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(tt.pages[idx])
+				default:
+					t.Fatalf("unexpected request: %s", r.URL.Path)
+				}
+			}))
+			defer ts.Close()
+
+			client, err := New(1, testKey)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			client.baseURL = ts.URL
+
+			got, err := client.ListPRFiles(context.Background(), installationID, "octo-org", "octo-repo", 7)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d files, want %d: %+v", len(got), len(tt.want), got)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("file %d: got %+v, want %+v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestClient_CommentOnPR(t *testing.T) {
 	const installationID = 42
 
