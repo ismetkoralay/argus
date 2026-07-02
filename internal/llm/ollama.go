@@ -113,13 +113,14 @@ func (p *OllamaProvider) generate(ctx context.Context, prompt string) (string, e
 	return gr.Response, nil
 }
 
-// parseAndValidate parses raw as a JSON array of findings, dropping (and
-// logging) any individual finding that fails validation. A JSON syntax
-// error is returned so the caller can trigger a repair retry; individual
-// finding validation failures are not treated as parse errors.
+// parseAndValidate parses raw as findings (see unmarshalFindings for the
+// shapes accepted), dropping (and logging) any individual finding that
+// fails validation. A JSON syntax/shape error is returned so the caller
+// can trigger a repair retry; individual finding validation failures are
+// not treated as parse errors.
 func (p *OllamaProvider) parseAndValidate(raw string) ([]review.Finding, error) {
-	var candidates []review.Finding
-	if err := json.Unmarshal([]byte(raw), &candidates); err != nil {
+	candidates, err := unmarshalFindings(raw)
+	if err != nil {
 		return nil, err
 	}
 
@@ -132,6 +133,35 @@ func (p *OllamaProvider) parseAndValidate(raw string) ([]review.Finding, error) 
 		findings = append(findings, f)
 	}
 	return findings, nil
+}
+
+// unmarshalFindings accepts the findings shapes Ollama's format:"json" mode
+// actually produces: the requested {"findings": [...]} object (its
+// structural bias when asked for JSON), a bare array (in case a model
+// returns one anyway), or a single bare finding object (when a model
+// collapses a one-element result). It tries each in turn and returns the
+// bare-array error if none match, since that's the schema we ultimately
+// need.
+func unmarshalFindings(raw string) ([]review.Finding, error) {
+	var wrapper struct {
+		Findings []review.Finding `json:"findings"`
+	}
+	if err := json.Unmarshal([]byte(raw), &wrapper); err == nil && wrapper.Findings != nil {
+		return wrapper.Findings, nil
+	}
+
+	var arr []review.Finding
+	arrErr := json.Unmarshal([]byte(raw), &arr)
+	if arrErr == nil {
+		return arr, nil
+	}
+
+	var single review.Finding
+	if err := json.Unmarshal([]byte(raw), &single); err == nil {
+		return []review.Finding{single}, nil
+	}
+
+	return nil, arrErr
 }
 
 func validateFinding(f review.Finding) (string, bool) {
@@ -159,9 +189,9 @@ func buildPrompt(unit review.DiffUnit, cfg review.Config) string {
 	}
 	fmt.Fprintf(&b, ".\n\n")
 	fmt.Fprintf(&b, "Review the following diff hunk from file %q and report findings.\n", unit.File)
-	fmt.Fprint(&b, "Respond with ONLY a JSON array (no prose, no markdown fences) of objects matching this schema:\n")
-	fmt.Fprint(&b, `[{"file": string, "line": number, "severity": "info"|"warning"|"error", "category": "bug"|"security"|"performance"|"style"|"maintainability", "message": string, "suggestion": string (optional)}]`+"\n")
-	fmt.Fprint(&b, "If there are no findings, respond with an empty array: []\n\n")
+	fmt.Fprint(&b, "Respond with ONLY a JSON object (no prose, no markdown fences) matching this schema:\n")
+	fmt.Fprint(&b, `{"findings": [{"file": string, "line": number, "severity": "info"|"warning"|"error", "category": "bug"|"security"|"performance"|"style"|"maintainability", "message": string, "suggestion": string (optional)}]}`+"\n")
+	fmt.Fprint(&b, `If there are no findings, respond with {"findings": []}`+"\n\n")
 	fmt.Fprint(&b, "Diff:\n")
 	fmt.Fprint(&b, unit.Hunk)
 	return b.String()

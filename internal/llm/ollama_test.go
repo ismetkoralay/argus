@@ -72,6 +72,42 @@ func TestOllamaProvider_Review(t *testing.T) {
 		}
 	})
 
+	t.Run("object-wrapped findings on first try (Ollama's json mode bias)", func(t *testing.T) {
+		wrappedJSON := `{"findings":[{"file":"main.go","line":2,"severity":"warning","category":"style","message":"nit"}]}`
+		ts, calls := newTestServer(t, wrappedJSON)
+		defer ts.Close()
+
+		p := NewOllamaProvider(ts.URL, "test-model", ts.Client(), nil)
+		findings, err := p.Review(context.Background(), unit, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(findings) != 1 || findings[0].Message != "nit" {
+			t.Fatalf("got %+v, want one finding with message 'nit'", findings)
+		}
+		if *calls != 1 {
+			t.Fatalf("got %d calls, want 1 (object-wrapped findings shouldn't trigger repair)", *calls)
+		}
+	})
+
+	t.Run("single bare object (one finding, no array) on first try", func(t *testing.T) {
+		singleJSON := `{"file":"main.go","line":2,"severity":"warning","category":"style","message":"nit"}`
+		ts, calls := newTestServer(t, singleJSON)
+		defer ts.Close()
+
+		p := NewOllamaProvider(ts.URL, "test-model", ts.Client(), nil)
+		findings, err := p.Review(context.Background(), unit, cfg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(findings) != 1 || findings[0].Message != "nit" {
+			t.Fatalf("got %+v, want one finding with message 'nit'", findings)
+		}
+		if *calls != 1 {
+			t.Fatalf("got %d calls, want 1 (bare single object shouldn't trigger repair)", *calls)
+		}
+	})
+
 	t.Run("invalid JSON on both attempts returns error", func(t *testing.T) {
 		ts, calls := newTestServer(t, "not json", "still not json")
 		defer ts.Close()
