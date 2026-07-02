@@ -6,10 +6,15 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/google/go-github/v88/github"
 )
+
+// summaryCommentMarker prefixes Argus's summary comment so re-reviews can
+// find and edit it instead of posting a new one each time.
+const summaryCommentMarker = "<!-- argus-summary -->"
 
 // Client authenticates as a GitHub App and acts on its installations.
 type Client struct {
@@ -73,6 +78,35 @@ func (c *Client) CommentOnPR(ctx context.Context, installationID int64, owner, r
 
 	if _, _, err := ghClient.Issues.CreateComment(ctx, owner, repo, prNumber, &github.IssueComment{Body: &body}); err != nil {
 		return fmt.Errorf("failed to create PR comment: %w", err)
+	}
+	return nil
+}
+
+// UpsertSummaryComment creates or updates Argus's single summary comment on
+// the given pull request. body must start with summaryCommentMarker so a
+// later call can find and edit it instead of posting a duplicate.
+func (c *Client) UpsertSummaryComment(ctx context.Context, installationID int64, owner, repo string, prNumber int, body string) error {
+	ghClient, err := c.installationClient(installationID)
+	if err != nil {
+		return err
+	}
+
+	comments, _, err := ghClient.Issues.ListComments(ctx, owner, repo, prNumber, nil)
+	if err != nil {
+		return fmt.Errorf("failed to list PR comments: %w", err)
+	}
+
+	for _, comment := range comments {
+		if strings.HasPrefix(comment.GetBody(), summaryCommentMarker) {
+			if _, _, err := ghClient.Issues.EditComment(ctx, owner, repo, comment.GetID(), &github.IssueComment{Body: &body}); err != nil {
+				return fmt.Errorf("failed to edit summary comment: %w", err)
+			}
+			return nil
+		}
+	}
+
+	if _, _, err := ghClient.Issues.CreateComment(ctx, owner, repo, prNumber, &github.IssueComment{Body: &body}); err != nil {
+		return fmt.Errorf("failed to create summary comment: %w", err)
 	}
 	return nil
 }

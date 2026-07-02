@@ -19,7 +19,15 @@ const testSecret = "test-secret"
 const openedPRPayload = `{
   "action": "opened",
   "number": 7,
-  "pull_request": {"number": 7},
+  "pull_request": {"number": 7, "head": {"sha": "deadbeef"}},
+  "repository": {"name": "octo-repo", "owner": {"login": "octo-org"}},
+  "installation": {"id": 42}
+}`
+
+const synchronizePRPayload = `{
+  "action": "synchronize",
+  "number": 7,
+  "pull_request": {"number": 7, "head": {"sha": "cafef00d"}},
   "repository": {"name": "octo-repo", "owner": {"login": "octo-org"}},
   "installation": {"id": 42}
 }`
@@ -27,29 +35,31 @@ const openedPRPayload = `{
 const closedPRPayload = `{
   "action": "closed",
   "number": 7,
-  "pull_request": {"number": 7},
+  "pull_request": {"number": 7, "head": {"sha": "deadbeef"}},
   "repository": {"name": "octo-repo", "owner": {"login": "octo-org"}},
   "installation": {"id": 42}
 }`
 
-type fakeCommenter struct {
+type fakeReviewer struct {
 	called          chan struct{}
 	err             error
 	gotInstallation int64
 	gotOwner        string
 	gotRepo         string
 	gotPRNumber     int
+	gotHeadSHA      string
 }
 
-func newFakeCommenter() *fakeCommenter {
-	return &fakeCommenter{called: make(chan struct{}, 1)}
+func newFakeReviewer() *fakeReviewer {
+	return &fakeReviewer{called: make(chan struct{}, 1)}
 }
 
-func (f *fakeCommenter) CommentOnPR(_ context.Context, installationID int64, owner, repo string, prNumber int, _ string) error {
+func (f *fakeReviewer) ReviewPR(_ context.Context, installationID int64, owner, repo string, prNumber int, headSHA string) error {
 	f.gotInstallation = installationID
 	f.gotOwner = owner
 	f.gotRepo = repo
 	f.gotPRNumber = prNumber
+	f.gotHeadSHA = headSHA
 	f.called <- struct{}{}
 	return f.err
 }
@@ -71,8 +81,8 @@ func doRequest(t *testing.T, secret, body, signature, eventType string) *httptes
 		req.Header.Set(github.EventTypeHeader, eventType)
 	}
 
-	commenter := newFakeCommenter()
-	h := NewHandler([]byte(secret), commenter, nil)
+	reviewer := newFakeReviewer()
+	h := NewHandler([]byte(secret), reviewer, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -117,12 +127,21 @@ func TestHandler_EventRouting(t *testing.T) {
 		eventType  string
 		payload    string
 		wantCalled bool
+		wantSHA    string
 	}{
 		{
-			name:       "pull_request opened triggers comment",
+			name:       "pull_request opened triggers a review",
 			eventType:  "pull_request",
 			payload:    openedPRPayload,
 			wantCalled: true,
+			wantSHA:    "deadbeef",
+		},
+		{
+			name:       "pull_request synchronize triggers a review",
+			eventType:  "pull_request",
+			payload:    synchronizePRPayload,
+			wantCalled: true,
+			wantSHA:    "cafef00d",
 		},
 		{
 			name:       "pull_request closed is a no-op",
@@ -145,8 +164,8 @@ func TestHandler_EventRouting(t *testing.T) {
 			req.Header.Set(github.SHA256SignatureHeader, sign(testSecret, tt.payload))
 			req.Header.Set(github.EventTypeHeader, tt.eventType)
 
-			commenter := newFakeCommenter()
-			h := NewHandler([]byte(testSecret), commenter, nil)
+			reviewer := newFakeReviewer()
+			h := NewHandler([]byte(testSecret), reviewer, nil)
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
 
@@ -155,17 +174,17 @@ func TestHandler_EventRouting(t *testing.T) {
 			}
 
 			select {
-			case <-commenter.called:
+			case <-reviewer.called:
 				if !tt.wantCalled {
-					t.Fatal("commenter was called but should not have been")
+					t.Fatal("reviewer was called but should not have been")
 				}
-				if commenter.gotInstallation != 42 || commenter.gotOwner != "octo-org" ||
-					commenter.gotRepo != "octo-repo" || commenter.gotPRNumber != 7 {
-					t.Fatalf("commenter got unexpected args: %+v", commenter)
+				if reviewer.gotInstallation != 42 || reviewer.gotOwner != "octo-org" ||
+					reviewer.gotRepo != "octo-repo" || reviewer.gotPRNumber != 7 || reviewer.gotHeadSHA != tt.wantSHA {
+					t.Fatalf("reviewer got unexpected args: %+v", reviewer)
 				}
 			case <-time.After(200 * time.Millisecond):
 				if tt.wantCalled {
-					t.Fatal("expected commenter to be called, timed out waiting")
+					t.Fatal("expected reviewer to be called, timed out waiting")
 				}
 			}
 		})

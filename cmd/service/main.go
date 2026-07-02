@@ -14,6 +14,8 @@ import (
 	"github.com/ismetkoralay/argus/internal/config"
 	"github.com/ismetkoralay/argus/internal/githubapp"
 	"github.com/ismetkoralay/argus/internal/health"
+	"github.com/ismetkoralay/argus/internal/llm"
+	"github.com/ismetkoralay/argus/internal/review"
 	"github.com/ismetkoralay/argus/internal/webhook"
 )
 
@@ -32,9 +34,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	provider := llm.NewOllamaProvider(cfg.OllamaBaseURL, cfg.OllamaModel, nil, logger)
+	orchestrator := review.NewOrchestrator(provider, ghClient, logger)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health.Handler)
-	mux.Handle("POST /webhooks/github", webhook.NewHandler(cfg.GitHubWebhookSecret, ghClient, logger))
+	mux.Handle("POST /webhooks/github", webhook.NewHandler(cfg.GitHubWebhookSecret, orchestrator, logger))
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
