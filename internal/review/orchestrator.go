@@ -14,7 +14,7 @@ import (
 // Hardcoded for M1; become configurable via .argus.yml in M2.
 const (
 	concurrency   = 4
-	severityFloor = "warning"
+	severityFloor = "info"
 	commentCap    = 15
 )
 
