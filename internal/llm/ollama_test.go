@@ -32,6 +32,45 @@ func newTestServer(t *testing.T, responses ...string) (*httptest.Server, *int) {
 	return ts, &calls
 }
 
+func TestAnnotateHunk(t *testing.T) {
+	tests := []struct {
+		name string
+		hunk string
+		want string
+	}{
+		{
+			name: "context, added, and removed lines get correct new-file numbers",
+			hunk: "@@ -57,5 +66,5 @@\n return\n }\n \n-\thelpers.SuccessJsonResponse(w, http.StatusCreated, msg)\n+\thelpers.SuccessJsonResponse(w, http.StatusOK, msg)\n }",
+			want: "--- hunk, starting at file line 66 ---\n" +
+				"[66]  return\n" +
+				"[67]  }\n" +
+				"[68]  \n" +
+				"[removed, not in current file] -\thelpers.SuccessJsonResponse(w, http.StatusCreated, msg)\n" +
+				"[69] +\thelpers.SuccessJsonResponse(w, http.StatusOK, msg)\n" +
+				"[70]  }",
+		},
+		{
+			name: "second hunk header resets the counter",
+			hunk: "@@ -1,2 +1,2 @@\n line1\n+line2\n@@ -10,1 +11,2 @@\n line10\n+line11",
+			want: "--- hunk, starting at file line 1 ---\n" +
+				"[1]  line1\n" +
+				"[2] +line2\n" +
+				"--- hunk, starting at file line 11 ---\n" +
+				"[11]  line10\n" +
+				"[12] +line11",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := annotateHunk(tt.hunk)
+			if got != tt.want {
+				t.Fatalf("got:\n%s\nwant:\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestOllamaProvider_Review(t *testing.T) {
 	unit := review.DiffUnit{File: "main.go", Hunk: "@@ -1,1 +1,2 @@\n+bug"}
 	cfg := review.Config{Persona: "concise senior engineer"}

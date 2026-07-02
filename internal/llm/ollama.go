@@ -10,7 +10,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/ismetkoralay/argus/internal/review"
@@ -181,6 +183,43 @@ func validateFinding(f review.Finding) (string, bool) {
 	}
 }
 
+// hunkHeaderRe matches a unified diff hunk header and captures the new
+// (right-side) file's starting line number, e.g. "@@ -57,5 +66,5 @@" -> 66.
+var hunkHeaderRe = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
+
+// annotateHunk prefixes each line of a unified diff hunk with its exact
+// line number in the current (new) version of the file, so the model
+// copies a number instead of computing one from the diff arithmetic
+// itself — small models are unreliable at that arithmetic. The original
+// "@@ -a,b +c,d @@" header is replaced entirely (not just supplemented):
+// leaving the old-file number "a" visible was enough for models to latch
+// onto it instead of reading the per-line annotations.
+func annotateHunk(hunk string) string {
+	lines := strings.Split(hunk, "\n")
+	out := make([]string, 0, len(lines))
+	newLine := 0
+
+	for _, line := range lines {
+		if m := hunkHeaderRe.FindStringSubmatch(line); m != nil {
+			newLine, _ = strconv.Atoi(m[1])
+			out = append(out, fmt.Sprintf("--- hunk, starting at file line %d ---", newLine))
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(line, "+"):
+			out = append(out, fmt.Sprintf("[%d] %s", newLine, line))
+			newLine++
+		case strings.HasPrefix(line, "-"):
+			out = append(out, fmt.Sprintf("[removed, not in current file] %s", line))
+		default:
+			out = append(out, fmt.Sprintf("[%d] %s", newLine, line))
+			newLine++
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
 func buildPrompt(unit review.DiffUnit, cfg review.Config) string {
 	var b strings.Builder
 	fmt.Fprint(&b, "You are an automated code reviewer")
@@ -189,11 +228,14 @@ func buildPrompt(unit review.DiffUnit, cfg review.Config) string {
 	}
 	fmt.Fprintf(&b, ".\n\n")
 	fmt.Fprintf(&b, "Review the following diff hunk from file %q and report findings.\n", unit.File)
+	fmt.Fprint(&b, "Each line is prefixed with its exact line number in the CURRENT version of the file, in square brackets. ")
+	fmt.Fprint(&b, "Use that EXACT number for your finding's \"line\" field — do not compute or guess a line number yourself. ")
+	fmt.Fprint(&b, "Lines marked \"[removed, not in current file]\" no longer exist; if a finding is about a removed line, attribute it to the nearest line that still exists (e.g. the line that replaced it).\n")
 	fmt.Fprint(&b, "Respond with ONLY a JSON object (no prose, no markdown fences) matching this schema:\n")
 	fmt.Fprint(&b, `{"findings": [{"file": string, "line": number, "severity": "info"|"warning"|"error", "category": "bug"|"security"|"performance"|"style"|"maintainability", "message": string, "suggestion": string (optional)}]}`+"\n")
 	fmt.Fprint(&b, `If there are no findings, respond with {"findings": []}`+"\n\n")
 	fmt.Fprint(&b, "Diff:\n")
-	fmt.Fprint(&b, unit.Hunk)
+	fmt.Fprint(&b, annotateHunk(unit.Hunk))
 	return b.String()
 }
 
