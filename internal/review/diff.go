@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/ismetkoralay/argus/internal/githubapp"
 )
 
@@ -19,6 +20,32 @@ var lockfileNames = map[string]bool{
 	"package-lock.json": true,
 	"yarn.lock":         true,
 	"pnpm-lock.yaml":    true,
+}
+
+// FilterIgnored drops files matching any of the .argus.yml ignore globs
+// (doublestar patterns, e.g. "vendor/**", "**/*.lock"). A malformed pattern
+// is treated as matching nothing (it never excludes a file).
+func FilterIgnored(files []githubapp.PRFile, ignore []string) []githubapp.PRFile {
+	if len(ignore) == 0 {
+		return files
+	}
+
+	kept := make([]githubapp.PRFile, 0, len(files))
+	for _, f := range files {
+		if !matchesAny(ignore, f.Filename) {
+			kept = append(kept, f)
+		}
+	}
+	return kept
+}
+
+func matchesAny(patterns []string, name string) bool {
+	for _, pattern := range patterns {
+		if ok, err := doublestar.Match(pattern, name); err == nil && ok {
+			return true
+		}
+	}
+	return false
 }
 
 // BuildDiffUnits turns a PR's changed files into reviewable DiffUnits: one

@@ -66,3 +66,53 @@ func TestBuildDiffUnits_OversizedFileSplitsPerHunk(t *testing.T) {
 		t.Fatalf("unit 1 doesn't start with second hunk header: %q", units[1].Hunk[:30])
 	}
 }
+
+func TestFilterIgnored(t *testing.T) {
+	files := []githubapp.PRFile{
+		{Filename: "main.go", Patch: "patch"},
+		{Filename: "vendor/pkg/mod.go", Patch: "patch"},
+		{Filename: "web/dist/bundle.min.js", Patch: "patch"},
+		{Filename: "internal/gen/api.pb.go", Patch: "patch"},
+	}
+
+	tests := []struct {
+		name   string
+		ignore []string
+		want   []string
+	}{
+		{
+			name:   "no patterns keeps everything",
+			ignore: nil,
+			want:   []string{"main.go", "vendor/pkg/mod.go", "web/dist/bundle.min.js", "internal/gen/api.pb.go"},
+		},
+		{
+			name:   "simple glob matches one file",
+			ignore: []string{"web/dist/bundle.min.js"},
+			want:   []string{"main.go", "vendor/pkg/mod.go", "internal/gen/api.pb.go"},
+		},
+		{
+			name:   "recursive ** glob matches any depth under a directory",
+			ignore: []string{"vendor/**"},
+			want:   []string{"main.go", "web/dist/bundle.min.js", "internal/gen/api.pb.go"},
+		},
+		{
+			name:   "pattern with no match keeps everything",
+			ignore: []string{"**/*.lock"},
+			want:   []string{"main.go", "vendor/pkg/mod.go", "web/dist/bundle.min.js", "internal/gen/api.pb.go"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FilterIgnored(files, tt.ignore)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d files, want %d: %+v", len(got), len(tt.want), got)
+			}
+			for i, f := range got {
+				if f.Filename != tt.want[i] {
+					t.Fatalf("file %d: got %q, want %q", i, f.Filename, tt.want[i])
+				}
+			}
+		})
+	}
+}

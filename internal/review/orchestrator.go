@@ -4,27 +4,29 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/ismetkoralay/argus/internal/githubapp"
+	"github.com/ismetkoralay/argus/internal/repoconfig"
 )
 
-// Hardcoded for M1; become configurable via .argus.yml in M2.
-const (
-	concurrency   = 4
-	severityFloor = "info"
-	commentCap    = 15
-)
+// concurrency bounds how many diff units are sent to the provider at once,
+// to keep a local Ollama instance responsive. Everything else that used to
+// be hardcoded here (severity floor, comment cap, ...) now comes from
+// .argus.yml via repoconfig; see loadConfig.
+const concurrency = 4
 
 var severityRank = map[string]int{"info": 0, "warning": 1, "error": 2}
 
 const summaryCommentMarker = "<!-- argus-summary -->"
 
 // GithubClient is the subset of githubapp.Client the orchestrator needs to
-// fetch a PR's diff and post its findings.
+// fetch a PR's diff and config, and post its findings.
 type GithubClient interface {
+	GetFileContent(ctx context.Context, installationID int64, owner, repo, ref, path string) ([]byte, bool, error)
 	ListPRFiles(ctx context.Context, installationID int64, owner, repo string, prNumber int) ([]githubapp.PRFile, error)
 	CreateReview(ctx context.Context, installationID int64, owner, repo string, prNumber int, commitSHA string, comments []githubapp.InlineComment, event, body string) error
 	UpsertSummaryComment(ctx context.Context, installationID int64, owner, repo string, prNumber int, body string) error
@@ -51,15 +53,27 @@ func NewOrchestrator(provider Provider, github GithubClient, logger *slog.Logger
 // plus a summary comment. Provider errors on individual units are logged
 // and skipped rather than failing the whole review.
 func (o *Orchestrator) ReviewPR(ctx context.Context, installationID int64, owner, repo string, prNumber int, headSHA string) error {
+	cfg := o.loadConfig(ctx, installationID, owner, repo, headSHA)
+
 	files, err := o.github.ListPRFiles(ctx, installationID, owner, repo, prNumber)
 	if err != nil {
 		return fmt.Errorf("list PR files: %w", err)
 	}
+	totalFiles := len(files)
+
+	files = FilterIgnored(files, cfg.Ignore)
+	sort.Slice(files, func(i, j int) bool { return files[i].Filename < files[j].Filename })
+	if len(files) > cfg.MaxFiles {
+		files = files[:cfg.MaxFiles]
+	}
+	reviewedFiles := len(files)
+
 	units := BuildDiffUnits(files)
 
-	findings := o.reviewUnits(ctx, units)
-	findings = filterBySeverityFloor(findings)
-	findings = capFindings(findings)
+	findings := o.reviewUnits(ctx, units, cfg.Persona)
+	findings = filterByCategory(findings, cfg.Categories)
+	findings = filterBySeverityFloor(findings, cfg.MinSeverity)
+	findings = capFindings(findings, cfg.MaxComments)
 
 	if len(findings) > 0 {
 		comments := make([]githubapp.InlineComment, 0, len(findings))
@@ -71,16 +85,35 @@ func (o *Orchestrator) ReviewPR(ctx context.Context, installationID int64, owner
 		}
 	}
 
-	summary := buildSummary(findings, len(files))
+	summary := buildSummary(findings, reviewedFiles, totalFiles)
 	if err := o.github.UpsertSummaryComment(ctx, installationID, owner, repo, prNumber, summary); err != nil {
 		return fmt.Errorf("upsert summary comment: %w", err)
 	}
 	return nil
 }
 
+// loadConfig fetches and parses .argus.yml from ref, logging and falling
+// back to repoconfig.Default if the file is absent, unreadable, or invalid.
+func (o *Orchestrator) loadConfig(ctx context.Context, installationID int64, owner, repo, ref string) repoconfig.Config {
+	raw, found, err := o.github.GetFileContent(ctx, installationID, owner, repo, ref, repoconfig.Path)
+	if err != nil {
+		o.logger.Warn("failed to fetch .argus.yml, using defaults", "err", err)
+		return repoconfig.Default
+	}
+	if !found {
+		return repoconfig.Default
+	}
+
+	cfg, err := repoconfig.Parse(raw)
+	if err != nil {
+		o.logger.Warn("invalid .argus.yml, using defaults", "err", err)
+	}
+	return cfg
+}
+
 // reviewUnits fans units out to the provider with bounded concurrency,
 // logging and skipping any unit whose review fails.
-func (o *Orchestrator) reviewUnits(ctx context.Context, units []DiffUnit) []Finding {
+func (o *Orchestrator) reviewUnits(ctx context.Context, units []DiffUnit, persona string) []Finding {
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -93,7 +126,7 @@ func (o *Orchestrator) reviewUnits(ctx context.Context, units []DiffUnit) []Find
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			unitFindings, err := o.provider.Review(ctx, unit, Config{})
+			unitFindings, err := o.provider.Review(ctx, unit, Config{Persona: persona})
 			if err != nil {
 				o.logger.Error("skipping diff unit after provider error", "err", err, "file", unit.File)
 				return
@@ -107,8 +140,18 @@ func (o *Orchestrator) reviewUnits(ctx context.Context, units []DiffUnit) []Find
 	return findings
 }
 
-func filterBySeverityFloor(findings []Finding) []Finding {
-	floor := severityRank[severityFloor]
+func filterByCategory(findings []Finding, categories []string) []Finding {
+	kept := make([]Finding, 0, len(findings))
+	for _, f := range findings {
+		if slices.Contains(categories, f.Category) {
+			kept = append(kept, f)
+		}
+	}
+	return kept
+}
+
+func filterBySeverityFloor(findings []Finding, minSeverity string) []Finding {
+	floor := severityRank[minSeverity]
 	kept := make([]Finding, 0, len(findings))
 	for _, f := range findings {
 		if severityRank[f.Severity] >= floor {
@@ -119,8 +162,8 @@ func filterBySeverityFloor(findings []Finding) []Finding {
 }
 
 // capFindings deterministically orders findings (highest severity first,
-// then file, then line) and truncates to commentCap.
-func capFindings(findings []Finding) []Finding {
+// then file, then line) and truncates to maxComments.
+func capFindings(findings []Finding, maxComments int) []Finding {
 	sort.SliceStable(findings, func(i, j int) bool {
 		if severityRank[findings[i].Severity] != severityRank[findings[j].Severity] {
 			return severityRank[findings[i].Severity] > severityRank[findings[j].Severity]
@@ -130,8 +173,8 @@ func capFindings(findings []Finding) []Finding {
 		}
 		return findings[i].Line < findings[j].Line
 	})
-	if len(findings) > commentCap {
-		findings = findings[:commentCap]
+	if len(findings) > maxComments {
+		findings = findings[:maxComments]
 	}
 	return findings
 }
@@ -147,7 +190,7 @@ func formatFindingBody(f Finding) string {
 	return b.String()
 }
 
-func buildSummary(findings []Finding, filesReviewed int) string {
+func buildSummary(findings []Finding, filesReviewed, totalFiles int) string {
 	bySeverity := map[string]int{}
 	byCategory := map[string]int{}
 	for _, f := range findings {
@@ -173,6 +216,6 @@ func buildSummary(findings []Finding, filesReviewed int) string {
 		fmt.Fprintf(&b, " (%s)", strings.Join(parts, ", "))
 	}
 	fmt.Fprintf(&b, " across %d files. Overall: %s.\n", filesReviewed, verdict)
-	fmt.Fprintf(&b, "Reviewed %d/%d changed files.", filesReviewed, filesReviewed)
+	fmt.Fprintf(&b, "Reviewed %d/%d changed files.", filesReviewed, totalFiles)
 	return b.String()
 }
