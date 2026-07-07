@@ -32,6 +32,22 @@ structured findings, and posts them as inline review comments plus a summary com
 `.env.example` to `.env` (git-ignored) for local dev; in CI/k8s these come from Secrets, never from
 a committed file.
 
+## Config & re-review (M2)
+A repo can commit a `.argus.yml` on the PR's head ref to control the review:
+```yaml
+min_severity: warning              # info | warning | error
+categories: [bug, security]        # subset of bug, security, performance, style, maintainability
+ignore: ["vendor/**", "**/*.lock"] # doublestar globs, filtered before the diff is sent to the LLM
+max_files: 25
+max_comments: 15
+persona: "concise senior engineer"
+```
+Any field left out keeps its default; a missing or malformed file falls back to defaults
+entirely (logged, not fatal). On re-review (a new commit, or a `/argus review` comment on the
+PR), Argus skips any finding it already posted for unchanged code — identity is a hash of
+file+line+message embedded as a marker in each comment, read back from GitHub's own comment
+listing, so no database is involved.
+
 ## Develop
 ```bash
 make run       # run the server (needs deps up)
