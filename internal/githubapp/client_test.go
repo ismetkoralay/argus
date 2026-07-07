@@ -2,6 +2,7 @@ package githubapp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -381,4 +382,89 @@ func TestClient_UpsertSummaryComment(t *testing.T) {
 			t.Fatalf("got edited body %q (called=%v), want %q", edited, editCalled, body)
 		}
 	})
+}
+
+func TestClient_GetFileContent(t *testing.T) {
+	const installationID = 42
+
+	tests := []struct {
+		name       string
+		statusCode int
+		body       map[string]any
+		wantFound  bool
+		wantErr    bool
+		want       string
+	}{
+		{
+			name:       "file found",
+			statusCode: http.StatusOK,
+			body: map[string]any{
+				"type":     "file",
+				"encoding": "base64",
+				"content":  base64.StdEncoding.EncodeToString([]byte("min_severity: warning\n")),
+			},
+			wantFound: true,
+			want:      "min_severity: warning\n",
+		},
+		{
+			name:       "file not found",
+			statusCode: http.StatusNotFound,
+			body:       map[string]any{"message": "Not Found"},
+			wantFound:  false,
+		},
+		{
+			name:       "other api error",
+			statusCode: http.StatusForbidden,
+			body:       map[string]any{"message": "Forbidden"},
+			wantErr:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == fmt.Sprintf("/app/installations/%d/access_tokens", installationID):
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"token":      "test-token",
+						"expires_at": time.Now().Add(5 * time.Minute),
+					})
+				case r.URL.Path == "/repos/octo-org/octo-repo/contents/.argus.yml":
+					if r.URL.Query().Get("ref") != "deadbeef" {
+						t.Fatalf("got ref %q, want deadbeef", r.URL.Query().Get("ref"))
+					}
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(tt.statusCode)
+					_ = json.NewEncoder(w).Encode(tt.body)
+				default:
+					t.Fatalf("unexpected request: %s", r.URL.Path)
+				}
+			}))
+			defer ts.Close()
+
+			client, err := New(1, testKey)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			client.baseURL = ts.URL
+
+			got, found, err := client.GetFileContent(context.Background(), installationID, "octo-org", "octo-repo", "deadbeef", ".argus.yml")
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if found != tt.wantFound {
+				t.Fatalf("got found=%v, want %v", found, tt.wantFound)
+			}
+			if found && string(got) != tt.want {
+				t.Fatalf("got content %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
