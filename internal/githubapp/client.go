@@ -111,6 +111,32 @@ func (c *Client) UpsertSummaryComment(ctx context.Context, installationID int64,
 	return nil
 }
 
+// GetFileContent fetches path's content at ref (a branch, tag, or SHA).
+// found is false with a nil error if the file doesn't exist at that ref.
+func (c *Client) GetFileContent(ctx context.Context, installationID int64, owner, repo, ref, path string) ([]byte, bool, error) {
+	ghClient, err := c.installationClient(installationID)
+	if err != nil {
+		return nil, false, err
+	}
+
+	fileContent, _, resp, err := ghClient.Repositories.GetContents(ctx, owner, repo, path, &github.RepositoryContentGetOptions{Ref: ref})
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("failed to get content for %s: %w", path, err)
+	}
+	if fileContent == nil {
+		return nil, false, fmt.Errorf("%s is a directory, not a file", path)
+	}
+
+	content, err := fileContent.GetContent()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to decode content for %s: %w", path, err)
+	}
+	return []byte(content), true, nil
+}
+
 // ListPRFiles fetches every changed file (across all pages) for the given
 // pull request.
 func (c *Client) ListPRFiles(ctx context.Context, installationID int64, owner, repo string, prNumber int) ([]PRFile, error) {
