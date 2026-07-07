@@ -11,10 +11,14 @@ import (
 	"time"
 
 	"github.com/ismetkoralay/argus/internal/githubapp"
+	"github.com/ismetkoralay/argus/internal/repoconfig"
 )
 
 type fakeGithubClient struct {
-	files []githubapp.PRFile
+	files         []githubapp.PRFile
+	configContent []byte
+	configFound   bool
+	configErr     error
 
 	mu               sync.Mutex
 	reviewCalled     bool
@@ -25,6 +29,10 @@ type fakeGithubClient struct {
 	summaryBody      string
 	createReviewErr  error
 	upsertSummaryErr error
+}
+
+func (f *fakeGithubClient) GetFileContent(_ context.Context, _ int64, _, _, _, _ string) ([]byte, bool, error) {
+	return f.configContent, f.configFound, f.configErr
 }
 
 func (f *fakeGithubClient) ListPRFiles(_ context.Context, _ int64, _, _ string, _ int) ([]githubapp.PRFile, error) {
@@ -83,8 +91,8 @@ func TestOrchestrator_ReviewPR_SeverityFloorKeepsEverythingAtOrAboveFloor(t *tes
 		{File: "a.go", Line: 1, Severity: "info", Category: "style", Message: "at floor"},
 		{File: "a.go", Line: 2, Severity: "warning", Category: "style", Message: "above floor"},
 	}}
-	if severityRank[severityFloor] > severityRank["info"] {
-		t.Fatalf("severityFloor is %q, but this test assumes info is at or above the floor", severityFloor)
+	if severityRank[repoconfig.Default.MinSeverity] > severityRank["info"] {
+		t.Fatalf("default min_severity is %q, but this test assumes info is at or above the floor", repoconfig.Default.MinSeverity)
 	}
 
 	o := NewOrchestrator(provider, gh, nil)
@@ -95,7 +103,7 @@ func TestOrchestrator_ReviewPR_SeverityFloorKeepsEverythingAtOrAboveFloor(t *tes
 	gh.mu.Lock()
 	defer gh.mu.Unlock()
 	if len(gh.reviewComments) != 2 {
-		t.Fatalf("got %d comments, want 2 (both at or above the %q floor): %+v", len(gh.reviewComments), severityFloor, gh.reviewComments)
+		t.Fatalf("got %d comments, want 2 (both at or above the %q floor): %+v", len(gh.reviewComments), repoconfig.Default.MinSeverity, gh.reviewComments)
 	}
 }
 
@@ -116,8 +124,8 @@ func TestOrchestrator_ReviewPR_CapsCommentCount(t *testing.T) {
 
 	gh.mu.Lock()
 	defer gh.mu.Unlock()
-	if len(gh.reviewComments) != commentCap {
-		t.Fatalf("got %d comments, want capped at %d", len(gh.reviewComments), commentCap)
+	if len(gh.reviewComments) != repoconfig.Default.MaxComments {
+		t.Fatalf("got %d comments, want capped at %d", len(gh.reviewComments), repoconfig.Default.MaxComments)
 	}
 }
 
@@ -193,5 +201,168 @@ func TestOrchestrator_ReviewPR_NoFindingsSkipsReviewButPostsSummary(t *testing.T
 	}
 	if !gh.summaryCalled || !strings.Contains(gh.summaryBody, "looks good") {
 		t.Fatalf("got summary called=%v body=%q, want it called with a 'looks good' verdict", gh.summaryCalled, gh.summaryBody)
+	}
+}
+
+func TestOrchestrator_ReviewPR_ConfigMinSeverityRaisesFloor(t *testing.T) {
+	gh := &fakeGithubClient{
+		files:         []githubapp.PRFile{patchFile("a.go", 1)},
+		configFound:   true,
+		configContent: []byte("min_severity: error\n"),
+	}
+	provider := &FakeProvider{Findings: []Finding{
+		{File: "a.go", Line: 1, Severity: "warning", Category: "style", Message: "below new floor"},
+		{File: "a.go", Line: 2, Severity: "error", Category: "bug", Message: "above new floor"},
+	}}
+
+	o := NewOrchestrator(provider, gh, nil)
+	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gh.mu.Lock()
+	defer gh.mu.Unlock()
+	if len(gh.reviewComments) != 1 || !strings.Contains(gh.reviewComments[0].Body, "above new floor") {
+		t.Fatalf("got %+v, want only the error-severity finding", gh.reviewComments)
+	}
+}
+
+func TestOrchestrator_ReviewPR_ConfigCategoriesFiltersFindings(t *testing.T) {
+	gh := &fakeGithubClient{
+		files:         []githubapp.PRFile{patchFile("a.go", 1)},
+		configFound:   true,
+		configContent: []byte("categories: [bug]\n"),
+	}
+	provider := &FakeProvider{Findings: []Finding{
+		{File: "a.go", Line: 1, Severity: "error", Category: "style", Message: "style finding"},
+		{File: "a.go", Line: 2, Severity: "error", Category: "bug", Message: "bug finding"},
+	}}
+
+	o := NewOrchestrator(provider, gh, nil)
+	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gh.mu.Lock()
+	defer gh.mu.Unlock()
+	if len(gh.reviewComments) != 1 || !strings.Contains(gh.reviewComments[0].Body, "bug finding") {
+		t.Fatalf("got %+v, want only the bug-category finding", gh.reviewComments)
+	}
+}
+
+func TestOrchestrator_ReviewPR_ConfigIgnoreDropsFiles(t *testing.T) {
+	gh := &fakeGithubClient{
+		files:         []githubapp.PRFile{patchFile("a.go", 1), patchFile("vendor/dep.go", 2)},
+		configFound:   true,
+		configContent: []byte("ignore:\n  - \"vendor/**\"\n"),
+	}
+	provider := &FakeProvider{FindingsFunc: func(unit DiffUnit) ([]Finding, error) {
+		return []Finding{{File: unit.File, Line: 1, Severity: "error", Category: "bug", Message: "bug in " + unit.File}}, nil
+	}}
+
+	o := NewOrchestrator(provider, gh, nil)
+	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(provider.Calls) != 1 || provider.Calls[0].File != "a.go" {
+		t.Fatalf("got provider calls %+v, want only a.go (vendor/** ignored)", provider.Calls)
+	}
+	gh.mu.Lock()
+	defer gh.mu.Unlock()
+	if len(gh.reviewComments) != 1 || !strings.Contains(gh.reviewComments[0].Body, "a.go") {
+		t.Fatalf("got %+v, want only the a.go finding", gh.reviewComments)
+	}
+}
+
+func TestOrchestrator_ReviewPR_ConfigMaxFilesCapsFilesReviewed(t *testing.T) {
+	files := []githubapp.PRFile{patchFile("a.go", 1), patchFile("b.go", 2), patchFile("c.go", 3)}
+	gh := &fakeGithubClient{
+		files:         files,
+		configFound:   true,
+		configContent: []byte("max_files: 2\n"),
+	}
+	provider := &FakeProvider{FindingsFunc: func(unit DiffUnit) ([]Finding, error) {
+		return []Finding{{File: unit.File, Line: 1, Severity: "error", Category: "bug", Message: "bug"}}, nil
+	}}
+
+	o := NewOrchestrator(provider, gh, nil)
+	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(provider.Calls) != 2 {
+		t.Fatalf("got %d provider calls, want 2 (max_files cap)", len(provider.Calls))
+	}
+	gh.mu.Lock()
+	defer gh.mu.Unlock()
+	if !strings.Contains(gh.summaryBody, "Reviewed 2/3 changed files") {
+		t.Fatalf("got summary %q, want it to mention 2/3 changed files reviewed", gh.summaryBody)
+	}
+}
+
+func TestOrchestrator_ReviewPR_ConfigMaxCommentsOverridesCap(t *testing.T) {
+	files := make([]githubapp.PRFile, 0, 5)
+	for i := range 5 {
+		files = append(files, patchFile(fmt.Sprintf("f%d.go", i), i))
+	}
+	gh := &fakeGithubClient{
+		files:         files,
+		configFound:   true,
+		configContent: []byte("max_comments: 2\n"),
+	}
+	provider := &FakeProvider{FindingsFunc: func(unit DiffUnit) ([]Finding, error) {
+		return []Finding{{File: unit.File, Line: 1, Severity: "warning", Category: "style", Message: "finding"}}, nil
+	}}
+
+	o := NewOrchestrator(provider, gh, nil)
+	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gh.mu.Lock()
+	defer gh.mu.Unlock()
+	if len(gh.reviewComments) != 2 {
+		t.Fatalf("got %d comments, want capped at configured max_comments=2", len(gh.reviewComments))
+	}
+}
+
+func TestOrchestrator_ReviewPR_ConfigPersonaThreadedToProvider(t *testing.T) {
+	gh := &fakeGithubClient{
+		files:         []githubapp.PRFile{patchFile("a.go", 1)},
+		configFound:   true,
+		configContent: []byte("persona: \"concise senior engineer\"\n"),
+	}
+	provider := &FakeProvider{}
+
+	o := NewOrchestrator(provider, gh, nil)
+	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(provider.Configs) != 1 || provider.Configs[0].Persona != "concise senior engineer" {
+		t.Fatalf("got provider configs %+v, want persona threaded through", provider.Configs)
+	}
+}
+
+func TestOrchestrator_ReviewPR_MalformedConfigFallsBackToDefaults(t *testing.T) {
+	gh := &fakeGithubClient{
+		files:         []githubapp.PRFile{patchFile("a.go", 1)},
+		configFound:   true,
+		configContent: []byte("min_severity: not-a-real-severity\n"),
+	}
+	provider := &FakeProvider{Findings: []Finding{
+		{File: "a.go", Line: 1, Severity: "info", Category: "style", Message: "info finding"},
+	}}
+
+	o := NewOrchestrator(provider, gh, nil)
+	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gh.mu.Lock()
+	defer gh.mu.Unlock()
+	if len(gh.reviewComments) != 1 {
+		t.Fatalf("got %d comments, want 1 (malformed config should fall back to default info floor)", len(gh.reviewComments))
 	}
 }
