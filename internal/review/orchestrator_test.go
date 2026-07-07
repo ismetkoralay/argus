@@ -21,6 +21,8 @@ type fakeGithubClient struct {
 	configErr        error
 	existingComments []githubapp.ReviewComment
 	listCommentsErr  error
+	headSHA          string
+	headSHAErr       error
 
 	mu               sync.Mutex
 	reviewCalled     bool
@@ -35,6 +37,10 @@ type fakeGithubClient struct {
 
 func (f *fakeGithubClient) GetFileContent(_ context.Context, _ int64, _, _, _, _ string) ([]byte, bool, error) {
 	return f.configContent, f.configFound, f.configErr
+}
+
+func (f *fakeGithubClient) GetPRHeadSHA(_ context.Context, _ int64, _, _ string, _ int) (string, error) {
+	return f.headSHA, f.headSHAErr
 }
 
 func (f *fakeGithubClient) ListPRFiles(_ context.Context, _ int64, _, _ string, _ int) ([]githubapp.PRFile, error) {
@@ -445,5 +451,38 @@ func TestOrchestrator_ReviewPR_Dedup_OnlyNewFindingIsPosted(t *testing.T) {
 	defer gh.mu.Unlock()
 	if len(gh.reviewComments) != 1 || !strings.Contains(gh.reviewComments[0].Body, "a new bug in b.go") {
 		t.Fatalf("got %+v, want only the new b.go finding", gh.reviewComments)
+	}
+}
+
+func TestOrchestrator_ReviewPRByNumber_ResolvesHeadSHAAndReviews(t *testing.T) {
+	gh := &fakeGithubClient{
+		files:   []githubapp.PRFile{patchFile("a.go", 1)},
+		headSHA: "resolved-sha",
+	}
+	provider := &FakeProvider{Findings: []Finding{
+		{File: "a.go", Line: 1, Severity: "error", Category: "bug", Message: "a bug"},
+	}}
+
+	o := NewOrchestrator(provider, gh, nil)
+	if err := o.ReviewPRByNumber(context.Background(), 42, "octo-org", "octo-repo", 7); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gh.mu.Lock()
+	defer gh.mu.Unlock()
+	if gh.reviewCommitSHA != "resolved-sha" {
+		t.Fatalf("got commit SHA %q, want the resolved head SHA", gh.reviewCommitSHA)
+	}
+	if len(gh.reviewComments) != 1 {
+		t.Fatalf("got %d comments, want 1", len(gh.reviewComments))
+	}
+}
+
+func TestOrchestrator_ReviewPRByNumber_PropagatesHeadSHALookupError(t *testing.T) {
+	gh := &fakeGithubClient{headSHAErr: errors.New("boom")}
+	o := NewOrchestrator(&FakeProvider{}, gh, nil)
+
+	if err := o.ReviewPRByNumber(context.Background(), 42, "octo-org", "octo-repo", 7); err == nil {
+		t.Fatal("expected error when head SHA lookup fails, got nil")
 	}
 }

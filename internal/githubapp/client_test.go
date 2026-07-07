@@ -469,6 +469,65 @@ func TestClient_GetFileContent(t *testing.T) {
 	}
 }
 
+func TestClient_GetPRHeadSHA(t *testing.T) {
+	const installationID = 42
+
+	tests := []struct {
+		name       string
+		statusCode int
+		wantErr    bool
+		want       string
+	}{
+		{name: "success", statusCode: http.StatusOK, want: "cafef00d"},
+		{name: "github api error", statusCode: http.StatusNotFound, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == fmt.Sprintf("/app/installations/%d/access_tokens", installationID):
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"token":      "test-token",
+						"expires_at": time.Now().Add(5 * time.Minute),
+					})
+				case r.URL.Path == "/repos/octo-org/octo-repo/pulls/7":
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(tt.statusCode)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"number": 7,
+						"head":   map[string]any{"sha": tt.want},
+					})
+				default:
+					t.Fatalf("unexpected request: %s", r.URL.Path)
+				}
+			}))
+			defer ts.Close()
+
+			client, err := New(1, testKey)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			client.baseURL = ts.URL
+
+			got, err := client.GetPRHeadSHA(context.Background(), installationID, "octo-org", "octo-repo", 7)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("got sha %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestClient_ListReviewComments(t *testing.T) {
 	const installationID = 42
 
