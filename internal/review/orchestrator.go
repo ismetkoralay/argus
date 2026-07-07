@@ -27,6 +27,7 @@ const summaryCommentMarker = "<!-- argus-summary -->"
 // fetch a PR's diff and config, and post its findings.
 type GithubClient interface {
 	GetFileContent(ctx context.Context, installationID int64, owner, repo, ref, path string) ([]byte, bool, error)
+	GetPRHeadSHA(ctx context.Context, installationID int64, owner, repo string, prNumber int) (string, error)
 	ListPRFiles(ctx context.Context, installationID int64, owner, repo string, prNumber int) ([]githubapp.PRFile, error)
 	ListReviewComments(ctx context.Context, installationID int64, owner, repo string, prNumber int) ([]githubapp.ReviewComment, error)
 	CreateReview(ctx context.Context, installationID int64, owner, repo string, prNumber int, commitSHA string, comments []githubapp.InlineComment, event, body string) error
@@ -92,6 +93,18 @@ func (o *Orchestrator) ReviewPR(ctx context.Context, installationID int64, owner
 		return fmt.Errorf("upsert summary comment: %w", err)
 	}
 	return nil
+}
+
+// ReviewPRByNumber resolves the PR's current head SHA and runs the same
+// review as ReviewPR. It exists for the /argus review command, where the
+// issue_comment webhook payload doesn't include a head SHA the way a
+// pull_request payload does.
+func (o *Orchestrator) ReviewPRByNumber(ctx context.Context, installationID int64, owner, repo string, prNumber int) error {
+	headSHA, err := o.github.GetPRHeadSHA(ctx, installationID, owner, repo, prNumber)
+	if err != nil {
+		return fmt.Errorf("get PR head SHA: %w", err)
+	}
+	return o.ReviewPR(ctx, installationID, owner, repo, prNumber, headSHA)
 }
 
 // loadConfig fetches and parses .argus.yml from ref, logging and falling

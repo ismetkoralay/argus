@@ -177,6 +177,22 @@ func (c *Client) ListPRFiles(ctx context.Context, installationID int64, owner, r
 	return files, nil
 }
 
+// GetPRHeadSHA fetches the current head commit SHA of a pull request. Used
+// by the /argus review command, where the issue_comment webhook payload
+// doesn't include one.
+func (c *Client) GetPRHeadSHA(ctx context.Context, installationID int64, owner, repo string, prNumber int) (string, error) {
+	ghClient, err := c.installationClient(installationID)
+	if err != nil {
+		return "", err
+	}
+
+	pr, _, err := ghClient.PullRequests.Get(ctx, owner, repo, prNumber)
+	if err != nil {
+		return "", fmt.Errorf("failed to get pull request: %w", err)
+	}
+	return pr.GetHead().GetSHA(), nil
+}
+
 // ListReviewComments fetches every inline review comment (across all
 // pages) on the given pull request.
 func (c *Client) ListReviewComments(ctx context.Context, installationID int64, owner, repo string, prNumber int) ([]ReviewComment, error) {
