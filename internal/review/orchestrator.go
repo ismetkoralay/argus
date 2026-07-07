@@ -28,6 +28,7 @@ const summaryCommentMarker = "<!-- argus-summary -->"
 type GithubClient interface {
 	GetFileContent(ctx context.Context, installationID int64, owner, repo, ref, path string) ([]byte, bool, error)
 	ListPRFiles(ctx context.Context, installationID int64, owner, repo string, prNumber int) ([]githubapp.PRFile, error)
+	ListReviewComments(ctx context.Context, installationID int64, owner, repo string, prNumber int) ([]githubapp.ReviewComment, error)
 	CreateReview(ctx context.Context, installationID int64, owner, repo string, prNumber int, commitSHA string, comments []githubapp.InlineComment, event, body string) error
 	UpsertSummaryComment(ctx context.Context, installationID int64, owner, repo string, prNumber int, body string) error
 }
@@ -73,12 +74,13 @@ func (o *Orchestrator) ReviewPR(ctx context.Context, installationID int64, owner
 	findings := o.reviewUnits(ctx, units, cfg.Persona)
 	findings = filterByCategory(findings, cfg.Categories)
 	findings = filterBySeverityFloor(findings, cfg.MinSeverity)
+	findings = o.dedupAgainstExisting(ctx, installationID, owner, repo, prNumber, findings)
 	findings = capFindings(findings, cfg.MaxComments)
 
 	if len(findings) > 0 {
 		comments := make([]githubapp.InlineComment, 0, len(findings))
 		for _, f := range findings {
-			comments = append(comments, githubapp.InlineComment{Path: f.File, Line: f.Line, Body: formatFindingBody(f)})
+			comments = append(comments, githubapp.InlineComment{Path: f.File, Line: f.Line, Body: withFindingMarker(formatFindingBody(f), f)})
 		}
 		if err := o.github.CreateReview(ctx, installationID, owner, repo, prNumber, headSHA, comments, "COMMENT", ""); err != nil {
 			return fmt.Errorf("create review: %w", err)
@@ -109,6 +111,36 @@ func (o *Orchestrator) loadConfig(ctx context.Context, installationID int64, own
 		o.logger.Warn("invalid .argus.yml, using defaults", "err", err)
 	}
 	return cfg
+}
+
+// dedupAgainstExisting drops any finding that was already posted on a prior
+// review of this PR, identified by the finding-ID marker embedded in each
+// comment's body (see dedup.go). This is what keeps re-reviews stateless:
+// prior state is derived from GitHub's own comment listing, not a database.
+// A failure to list existing comments is logged and treated as "no existing
+// comments" — dedup is a noise-reduction nicety, not worth failing the
+// review over.
+func (o *Orchestrator) dedupAgainstExisting(ctx context.Context, installationID int64, owner, repo string, prNumber int, findings []Finding) []Finding {
+	existing, err := o.github.ListReviewComments(ctx, installationID, owner, repo, prNumber)
+	if err != nil {
+		o.logger.Warn("failed to list existing review comments, skipping dedup", "err", err)
+		return findings
+	}
+
+	posted := make(map[string]bool, len(existing))
+	for _, c := range existing {
+		if id, ok := extractFindingID(c.Body); ok {
+			posted[id] = true
+		}
+	}
+
+	kept := make([]Finding, 0, len(findings))
+	for _, f := range findings {
+		if !posted[findingID(f)] {
+			kept = append(kept, f)
+		}
+	}
+	return kept
 }
 
 // reviewUnits fans units out to the provider with bounded concurrency,
