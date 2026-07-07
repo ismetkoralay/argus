@@ -468,3 +468,91 @@ func TestClient_GetFileContent(t *testing.T) {
 		})
 	}
 }
+
+func TestClient_ListReviewComments(t *testing.T) {
+	const installationID = 42
+
+	tests := []struct {
+		name  string
+		pages [][]map[string]any
+		want  []ReviewComment
+	}{
+		{
+			name: "current comment has line set",
+			pages: [][]map[string]any{
+				{{"path": "main.go", "line": 12, "body": "a finding"}},
+			},
+			want: []ReviewComment{{Path: "main.go", Line: 12, Body: "a finding"}},
+		},
+		{
+			name: "outdated comment falls back to original_line",
+			pages: [][]map[string]any{
+				{{"path": "main.go", "line": nil, "original_line": 7, "body": "an outdated finding"}},
+			},
+			want: []ReviewComment{{Path: "main.go", Line: 7, Body: "an outdated finding"}},
+		},
+		{
+			name: "paginated across two pages",
+			pages: [][]map[string]any{
+				{{"path": "a.go", "line": 1, "body": "finding a"}},
+				{{"path": "b.go", "line": 2, "body": "finding b"}},
+			},
+			want: []ReviewComment{
+				{Path: "a.go", Line: 1, Body: "finding a"},
+				{Path: "b.go", Line: 2, Body: "finding b"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == fmt.Sprintf("/app/installations/%d/access_tokens", installationID):
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"token":      "test-token",
+						"expires_at": time.Now().Add(5 * time.Minute),
+					})
+				case r.URL.Path == "/repos/octo-org/octo-repo/pulls/7/comments":
+					page := 1
+					if p := r.URL.Query().Get("page"); p != "" {
+						_, _ = fmt.Sscanf(p, "%d", &page)
+					}
+					idx := page - 1
+					if idx < 0 || idx >= len(tt.pages) {
+						_ = json.NewEncoder(w).Encode([]map[string]any{})
+						return
+					}
+					if idx < len(tt.pages)-1 {
+						w.Header().Set("Link", fmt.Sprintf(`<%s?page=%d>; rel="next"`, r.URL.Path, page+1))
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(tt.pages[idx])
+				default:
+					t.Fatalf("unexpected request: %s", r.URL.Path)
+				}
+			}))
+			defer ts.Close()
+
+			client, err := New(1, testKey)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			client.baseURL = ts.URL
+
+			got, err := client.ListReviewComments(context.Background(), installationID, "octo-org", "octo-repo", 7)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d comments, want %d: %+v", len(got), len(tt.want), got)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("comment %d: got %+v, want %+v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}

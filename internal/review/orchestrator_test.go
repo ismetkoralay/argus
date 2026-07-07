@@ -15,10 +15,12 @@ import (
 )
 
 type fakeGithubClient struct {
-	files         []githubapp.PRFile
-	configContent []byte
-	configFound   bool
-	configErr     error
+	files            []githubapp.PRFile
+	configContent    []byte
+	configFound      bool
+	configErr        error
+	existingComments []githubapp.ReviewComment
+	listCommentsErr  error
 
 	mu               sync.Mutex
 	reviewCalled     bool
@@ -37,6 +39,10 @@ func (f *fakeGithubClient) GetFileContent(_ context.Context, _ int64, _, _, _, _
 
 func (f *fakeGithubClient) ListPRFiles(_ context.Context, _ int64, _, _ string, _ int) ([]githubapp.PRFile, error) {
 	return f.files, nil
+}
+
+func (f *fakeGithubClient) ListReviewComments(_ context.Context, _ int64, _, _ string, _ int) ([]githubapp.ReviewComment, error) {
+	return f.existingComments, f.listCommentsErr
 }
 
 func (f *fakeGithubClient) CreateReview(_ context.Context, _ int64, _, _ string, _ int, commitSHA string, comments []githubapp.InlineComment, event, _ string) error {
@@ -364,5 +370,80 @@ func TestOrchestrator_ReviewPR_MalformedConfigFallsBackToDefaults(t *testing.T) 
 	defer gh.mu.Unlock()
 	if len(gh.reviewComments) != 1 {
 		t.Fatalf("got %d comments, want 1 (malformed config should fall back to default info floor)", len(gh.reviewComments))
+	}
+}
+
+func TestOrchestrator_ReviewPR_Dedup_FirstReviewPostsEverything(t *testing.T) {
+	gh := &fakeGithubClient{files: []githubapp.PRFile{patchFile("a.go", 1), patchFile("b.go", 2)}}
+	provider := &FakeProvider{FindingsFunc: func(unit DiffUnit) ([]Finding, error) {
+		return []Finding{{File: unit.File, Line: 1, Severity: "error", Category: "bug", Message: "bug in " + unit.File}}, nil
+	}}
+
+	o := NewOrchestrator(provider, gh, nil)
+	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gh.mu.Lock()
+	defer gh.mu.Unlock()
+	if len(gh.reviewComments) != 2 {
+		t.Fatalf("got %d comments on a first review with no existing comments, want 2", len(gh.reviewComments))
+	}
+}
+
+func TestOrchestrator_ReviewPR_Dedup_IdenticalReReviewPostsNothing(t *testing.T) {
+	findingA := Finding{File: "a.go", Line: 1, Severity: "error", Category: "bug", Message: "bug in a.go"}
+	findingB := Finding{File: "b.go", Line: 1, Severity: "error", Category: "bug", Message: "bug in b.go"}
+	gh := &fakeGithubClient{
+		files: []githubapp.PRFile{patchFile("a.go", 1), patchFile("b.go", 2)},
+		existingComments: []githubapp.ReviewComment{
+			{Path: "a.go", Line: 1, Body: withFindingMarker("previously posted", findingA)},
+			{Path: "b.go", Line: 1, Body: withFindingMarker("previously posted", findingB)},
+		},
+	}
+	provider := &FakeProvider{FindingsFunc: func(unit DiffUnit) ([]Finding, error) {
+		if unit.File == "a.go" {
+			return []Finding{findingA}, nil
+		}
+		return []Finding{findingB}, nil
+	}}
+
+	o := NewOrchestrator(provider, gh, nil)
+	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gh.mu.Lock()
+	defer gh.mu.Unlock()
+	if gh.reviewCalled {
+		t.Fatalf("expected CreateReview not to be called when every finding was already posted, got comments %+v", gh.reviewComments)
+	}
+}
+
+func TestOrchestrator_ReviewPR_Dedup_OnlyNewFindingIsPosted(t *testing.T) {
+	findingA := Finding{File: "a.go", Line: 1, Severity: "error", Category: "bug", Message: "bug in a.go"}
+	newFindingB := Finding{File: "b.go", Line: 5, Severity: "error", Category: "bug", Message: "a new bug in b.go"}
+	gh := &fakeGithubClient{
+		files: []githubapp.PRFile{patchFile("a.go", 1), patchFile("b.go", 2)},
+		existingComments: []githubapp.ReviewComment{
+			{Path: "a.go", Line: 1, Body: withFindingMarker("previously posted", findingA)},
+		},
+	}
+	provider := &FakeProvider{FindingsFunc: func(unit DiffUnit) ([]Finding, error) {
+		if unit.File == "a.go" {
+			return []Finding{findingA}, nil
+		}
+		return []Finding{newFindingB}, nil
+	}}
+
+	o := NewOrchestrator(provider, gh, nil)
+	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gh.mu.Lock()
+	defer gh.mu.Unlock()
+	if len(gh.reviewComments) != 1 || !strings.Contains(gh.reviewComments[0].Body, "a new bug in b.go") {
+		t.Fatalf("got %+v, want only the new b.go finding", gh.reviewComments)
 	}
 }

@@ -39,6 +39,16 @@ type PRFile struct {
 	Status   string
 }
 
+// ReviewComment is an existing inline review comment on a pull request.
+// Line is the comment's current line on the diff if it's still part of it,
+// or its OriginalLine if the comment has since become "outdated" (GitHub
+// nulls Line once the surrounding diff context changes).
+type ReviewComment struct {
+	Path string
+	Line int
+	Body string
+}
+
 // New builds a Client that signs requests as the GitHub App identified by
 // appID, using privateKeyPEM to mint per-installation tokens on demand.
 func New(appID int64, privateKeyPEM []byte) (*Client, error) {
@@ -165,6 +175,36 @@ func (c *Client) ListPRFiles(ctx context.Context, installationID int64, owner, r
 		opts.Page = resp.NextPage
 	}
 	return files, nil
+}
+
+// ListReviewComments fetches every inline review comment (across all
+// pages) on the given pull request.
+func (c *Client) ListReviewComments(ctx context.Context, installationID int64, owner, repo string, prNumber int) ([]ReviewComment, error) {
+	ghClient, err := c.installationClient(installationID)
+	if err != nil {
+		return nil, err
+	}
+
+	var comments []ReviewComment
+	opts := &github.PullRequestListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
+	for {
+		page, resp, err := ghClient.PullRequests.ListComments(ctx, owner, repo, prNumber, opts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list PR review comments: %w", err)
+		}
+		for _, c := range page {
+			line := c.GetLine()
+			if c.Line == nil {
+				line = c.GetOriginalLine()
+			}
+			comments = append(comments, ReviewComment{Path: c.GetPath(), Line: line, Body: c.GetBody()})
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return comments, nil
 }
 
 // CreateReview posts a single GitHub review on the given pull request,
