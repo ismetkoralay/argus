@@ -10,13 +10,13 @@ func TestFindingID_StableAndDistinct(t *testing.T) {
 	differentFile := Finding{File: "other.go", Line: 12, Severity: "error", Category: "bug", Message: "nil check missing"}
 
 	if findingID(a) != findingID(sameA) {
-		t.Fatal("expected identity to depend only on file+line+message, not severity/category")
+		t.Fatal("expected identity to depend only on file+line, not severity/category")
 	}
 	if findingID(a) == findingID(differentLine) {
 		t.Fatal("expected different line to produce a different identity")
 	}
-	if findingID(a) == findingID(differentMessage) {
-		t.Fatal("expected different message to produce a different identity")
+	if findingID(a) != findingID(differentMessage) {
+		t.Fatal("expected identity to depend only on file+line, not message wording (LLM phrasing isn't stable across runs)")
 	}
 	if findingID(a) == findingID(differentFile) {
 		t.Fatal("expected different file to produce a different identity")
