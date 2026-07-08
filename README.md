@@ -45,8 +45,18 @@ persona: "concise senior engineer"
 Any field left out keeps its default; a missing or malformed file falls back to defaults
 entirely (logged, not fatal). On re-review (a new commit, or a `/argus review` comment on the
 PR), Argus skips any finding it already posted for unchanged code — identity is a hash of
-file+line+message embedded as a marker in each comment, read back from GitHub's own comment
-listing, so no database is involved.
+file+line embedded as a marker in each comment, read back from GitHub's own comment listing, so
+no database is involved.
+
+**Known limitation:** dedup identity intentionally excludes the LLM's message text, because its
+wording (and even category/severity pick) isn't stable across calls for the same unchanged code —
+an earlier file+line+message scheme caused the same finding to be reposted every time the model
+reworded it. File+line is more stable but not fully: the model doesn't always anchor a given
+finding to the same line either (observed drifting between a function's signature line and the
+specific statements inside it across re-review runs), so a semantically identical finding can
+still slip past dedup as a "new" one anchored a few lines away. Closing that gap needs fuzzy or
+semantic matching rather than exact hashing — out of scope for M2, worth revisiting if repost
+noise shows up in practice.
 
 ## Develop
 ```bash
