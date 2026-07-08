@@ -98,3 +98,4 @@ This project is a strong portfolio piece and is designed to run on a local by mi
 ## 9. Open Questions
 - Inline-comment anchoring against the diff position can be fiddly with the GitHub API — validate the approach early in M1.
 - Should very large PRs be summarized at a higher level instead of per-line? (Likely yes, gate behind a line-count threshold.)
+- Exact-match dedup (file+line, see README) can't catch the same finding reworded or re-anchored to a nearby line across review runs — semantic/fuzzy dedup would close this but is a bigger lift than M2's scope; revisit for M4 if repost noise shows up in practice.
