@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/ismetkoralay/argus/internal/githubapp"
+	"github.com/ismetkoralay/argus/internal/logging"
 	"github.com/ismetkoralay/argus/internal/repoconfig"
 )
 
@@ -55,6 +56,14 @@ func NewOrchestrator(provider Provider, github GithubClient, logger *slog.Logger
 // plus a summary comment. Provider errors on individual units are logged
 // and skipped rather than failing the whole review.
 func (o *Orchestrator) ReviewPR(ctx context.Context, installationID int64, owner, repo string, prNumber int, headSHA string) error {
+	// Enrich the context logger with this review's correlation fields. This
+	// is the one place both call paths (direct PR event, /argus review)
+	// converge with all three values guaranteed present, so every log line
+	// from here down carries them without threading a logger through every
+	// interface in the call chain.
+	logger := logging.FromContext(ctx, o.logger).With("repo", owner+"/"+repo, "pr", prNumber, "head_sha", headSHA)
+	ctx = logging.WithLogger(ctx, logger)
+
 	cfg := o.loadConfig(ctx, installationID, owner, repo, headSHA)
 
 	files, err := o.github.ListPRFiles(ctx, installationID, owner, repo, prNumber)
@@ -112,7 +121,7 @@ func (o *Orchestrator) ReviewPRByNumber(ctx context.Context, installationID int6
 func (o *Orchestrator) loadConfig(ctx context.Context, installationID int64, owner, repo, ref string) repoconfig.Config {
 	raw, found, err := o.github.GetFileContent(ctx, installationID, owner, repo, ref, repoconfig.Path)
 	if err != nil {
-		o.logger.Warn("failed to fetch .argus.yml, using defaults", "err", err)
+		logging.FromContext(ctx, o.logger).Warn("failed to fetch .argus.yml, using defaults", "err", err)
 		return repoconfig.Default
 	}
 	if !found {
@@ -121,7 +130,7 @@ func (o *Orchestrator) loadConfig(ctx context.Context, installationID int64, own
 
 	cfg, err := repoconfig.Parse(raw)
 	if err != nil {
-		o.logger.Warn("invalid .argus.yml, using defaults", "err", err)
+		logging.FromContext(ctx, o.logger).Warn("invalid .argus.yml, using defaults", "err", err)
 	}
 	return cfg
 }
@@ -136,7 +145,7 @@ func (o *Orchestrator) loadConfig(ctx context.Context, installationID int64, own
 func (o *Orchestrator) dedupAgainstExisting(ctx context.Context, installationID int64, owner, repo string, prNumber int, findings []Finding) []Finding {
 	existing, err := o.github.ListReviewComments(ctx, installationID, owner, repo, prNumber)
 	if err != nil {
-		o.logger.Warn("failed to list existing review comments, skipping dedup", "err", err)
+		logging.FromContext(ctx, o.logger).Warn("failed to list existing review comments, skipping dedup", "err", err)
 		return findings
 	}
 
@@ -173,7 +182,7 @@ func (o *Orchestrator) reviewUnits(ctx context.Context, units []DiffUnit, person
 
 			unitFindings, err := o.provider.Review(ctx, unit, Config{Persona: persona})
 			if err != nil {
-				o.logger.Error("skipping diff unit after provider error", "err", err, "file", unit.File)
+				logging.FromContext(ctx, o.logger).Error("skipping diff unit after provider error", "err", err, "file", unit.File)
 				return
 			}
 			mu.Lock()
