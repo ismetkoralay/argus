@@ -9,6 +9,8 @@ import (
 	"regexp"
 
 	"github.com/google/go-github/v88/github"
+
+	"github.com/ismetkoralay/argus/internal/logging"
 )
 
 // maxPayloadBytes caps the request body GitHub webhook deliveries may send.
@@ -61,12 +63,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	reqLogger := h.logger.With("delivery_id", github.DeliveryID(r))
+
 	var task func()
 	switch e := event.(type) {
 	case *github.PullRequestEvent:
-		task = h.pullRequestTask(e)
+		task = h.pullRequestTask(e, reqLogger)
 	case *github.IssueCommentEvent:
-		task = h.issueCommentTask(e)
+		task = h.issueCommentTask(e, reqLogger)
 	}
 
 	// Respond immediately so GitHub doesn't time out; review async.
@@ -77,8 +81,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // pullRequestTask returns the review to run for a pull_request event, or
-// nil if the action isn't one that warrants a review.
-func (h *handler) pullRequestTask(e *github.PullRequestEvent) func() {
+// nil if the action isn't one that warrants a review. reqLogger already
+// carries the delivery ID; the returned closure stores it on the context
+// passed to the reviewer so every log line for this review is correlated.
+func (h *handler) pullRequestTask(e *github.PullRequestEvent, reqLogger *slog.Logger) func() {
 	action := e.GetAction()
 	if action != "opened" && action != "synchronize" {
 		return nil
@@ -91,16 +97,19 @@ func (h *handler) pullRequestTask(e *github.PullRequestEvent) func() {
 	headSHA := e.GetPullRequest().GetHead().GetSHA()
 
 	return func() {
-		if err := h.reviewer.ReviewPR(context.Background(), installationID, owner, repo, prNumber, headSHA); err != nil {
-			h.logger.Error("failed to review PR", "err", err, "owner", owner, "repo", repo, "pr", prNumber)
+		ctx := logging.WithLogger(context.Background(), reqLogger)
+		if err := h.reviewer.ReviewPR(ctx, installationID, owner, repo, prNumber, headSHA); err != nil {
+			reqLogger.Error("failed to review PR", "err", err, "owner", owner, "repo", repo, "pr", prNumber, "head_sha", headSHA)
 		}
 	}
 }
 
 // issueCommentTask returns the review to run for an issue_comment event, or
 // nil unless it's a newly created "/argus review" comment from a non-bot
-// user on an open pull request (not a plain issue).
-func (h *handler) issueCommentTask(e *github.IssueCommentEvent) func() {
+// user on an open pull request (not a plain issue). reqLogger already
+// carries the delivery ID; the returned closure stores it on the context
+// passed to the reviewer so every log line for this review is correlated.
+func (h *handler) issueCommentTask(e *github.IssueCommentEvent, reqLogger *slog.Logger) func() {
 	if e.GetAction() != "created" {
 		return nil
 	}
@@ -120,8 +129,9 @@ func (h *handler) issueCommentTask(e *github.IssueCommentEvent) func() {
 	prNumber := e.GetIssue().GetNumber()
 
 	return func() {
-		if err := h.reviewer.ReviewPRByNumber(context.Background(), installationID, owner, repo, prNumber); err != nil {
-			h.logger.Error("failed to review PR via /argus review", "err", err, "owner", owner, "repo", repo, "pr", prNumber)
+		ctx := logging.WithLogger(context.Background(), reqLogger)
+		if err := h.reviewer.ReviewPRByNumber(ctx, installationID, owner, repo, prNumber); err != nil {
+			reqLogger.Error("failed to review PR via /argus review", "err", err, "owner", owner, "repo", repo, "pr", prNumber)
 		}
 	}
 }

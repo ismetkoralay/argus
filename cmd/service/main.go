@@ -4,7 +4,6 @@ package main
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,12 +14,16 @@ import (
 	"github.com/ismetkoralay/argus/internal/githubapp"
 	"github.com/ismetkoralay/argus/internal/health"
 	"github.com/ismetkoralay/argus/internal/llm"
+	"github.com/ismetkoralay/argus/internal/logging"
 	"github.com/ismetkoralay/argus/internal/review"
 	"github.com/ismetkoralay/argus/internal/webhook"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	// Read directly from the environment (not config.Config): the logger
+	// must exist before config.Load() runs so a config-validation failure
+	// itself can be logged.
+	logger := logging.New(os.Getenv("LOG_LEVEL"), os.Stdout)
 
 	cfg, err := config.Load()
 	if err != nil {

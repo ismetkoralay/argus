@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ismetkoralay/argus/internal/logging"
 	"github.com/ismetkoralay/argus/internal/review"
 )
 
@@ -57,23 +58,35 @@ type generateResponse struct {
 
 // Review implements review.Provider.
 func (p *OllamaProvider) Review(ctx context.Context, unit review.DiffUnit, cfg review.Config) ([]review.Finding, error) {
-	raw, err := p.generate(ctx, buildPrompt(unit, cfg))
+	logger := logging.FromContext(ctx, p.logger)
+
+	prompt := buildPrompt(unit, cfg)
+	// Debug-only: the prompt embeds the full diff hunk, so this must never
+	// log at default level. Suppressed unless LOG_LEVEL=debug.
+	logger.Debug("ollama request", "file", unit.File, "prompt", prompt)
+
+	raw, err := p.generate(ctx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("ollama generate: %w", err)
 	}
+	logger.Debug("ollama response", "file", unit.File, "raw", raw)
 
-	findings, parseErr := p.parseAndValidate(raw)
+	findings, parseErr := p.parseAndValidate(ctx, raw)
 	if parseErr == nil {
 		return findings, nil
 	}
-	p.logger.Warn("ollama returned invalid findings JSON, retrying with repair prompt", "err", parseErr)
+	logger.Warn("ollama returned invalid findings JSON, retrying with repair prompt", "err", parseErr)
 
-	raw, err = p.generate(ctx, buildRepairPrompt(unit, cfg, raw, parseErr))
+	repairPrompt := buildRepairPrompt(unit, cfg, raw, parseErr)
+	logger.Debug("ollama repair request", "file", unit.File, "prompt", repairPrompt)
+
+	raw, err = p.generate(ctx, repairPrompt)
 	if err != nil {
 		return nil, fmt.Errorf("ollama generate (repair retry): %w", err)
 	}
+	logger.Debug("ollama repair response", "file", unit.File, "raw", raw)
 
-	findings, parseErr = p.parseAndValidate(raw)
+	findings, parseErr = p.parseAndValidate(ctx, raw)
 	if parseErr != nil {
 		return nil, fmt.Errorf("parse ollama findings after repair retry: %w", parseErr)
 	}
@@ -120,16 +133,17 @@ func (p *OllamaProvider) generate(ctx context.Context, prompt string) (string, e
 // fails validation. A JSON syntax/shape error is returned so the caller
 // can trigger a repair retry; individual finding validation failures are
 // not treated as parse errors.
-func (p *OllamaProvider) parseAndValidate(raw string) ([]review.Finding, error) {
+func (p *OllamaProvider) parseAndValidate(ctx context.Context, raw string) ([]review.Finding, error) {
 	candidates, err := unmarshalFindings(raw)
 	if err != nil {
 		return nil, err
 	}
 
+	logger := logging.FromContext(ctx, p.logger)
 	findings := make([]review.Finding, 0, len(candidates))
 	for _, f := range candidates {
 		if reason, ok := validateFinding(f); !ok {
-			p.logger.Warn("dropping invalid finding", "reason", reason, "finding", f)
+			logger.Warn("dropping invalid finding", "reason", reason, "finding", f)
 			continue
 		}
 		findings = append(findings, f)
