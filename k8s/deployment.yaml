@@ -14,7 +14,7 @@ spec:
       containers:
         - name: argus
           image: argus:latest
-          imagePullPolicy: IfNotPresent   # use locally-built image (minikube/kind)
+          imagePullPolicy: IfNotPresent   # use locally-built image (kind)
           ports: [{ containerPort: 8080 }]
           envFrom:
             - secretRef: { name: argus-secrets }
