@@ -70,7 +70,7 @@ When the project is done, run this exact request:
 >    claiming an automated end-to-end.
 > 5. Key design decisions & trade-offs (leave a TODO marker for me to refine).
 > 6. Local development.
-> 7. Deploy to kind.
+> 7. Deploy to kind (include the `kind load docker-image` step — kind does not share the host Docker daemon).
 > Rules: no emoji, no exhaustive feature list, no filler. Every command must work as written.
 > If something in the skeleton README no longer matches the code, fix it to match reality.
 
