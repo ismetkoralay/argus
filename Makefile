@@ -10,7 +10,7 @@ test:
 	go test -race -coverprofile=coverage.out ./...
 
 lint:
-	$(shell go env GOPATH)/bin/golangci-lint run
+	golangci-lint run
 
 tidy:
 	go mod tidy

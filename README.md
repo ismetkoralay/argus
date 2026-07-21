@@ -66,11 +66,11 @@ make lint      # golangci-lint
 make build     # compile binary
 ```
 
-## Deploy to minikube
+## Deploy to kind
 ```bash
-minikube start
-eval "$(minikube docker-env)"      # build into minikube's docker
+kind create cluster
 docker build -t argus:latest .
+kind load docker-image argus:latest
 cp k8s/secret.example.yaml k8s/secret.yaml   # fill in real values, git-ignored
 kubectl apply -f k8s/secret.yaml
 kubectl apply -k k8s/
