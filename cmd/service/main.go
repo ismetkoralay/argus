@@ -10,11 +10,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/ismetkoralay/argus/internal/config"
 	"github.com/ismetkoralay/argus/internal/githubapp"
 	"github.com/ismetkoralay/argus/internal/health"
 	"github.com/ismetkoralay/argus/internal/llm"
 	"github.com/ismetkoralay/argus/internal/logging"
+	"github.com/ismetkoralay/argus/internal/metrics"
 	"github.com/ismetkoralay/argus/internal/review"
 	"github.com/ismetkoralay/argus/internal/webhook"
 )
@@ -37,11 +41,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	reg := prometheus.NewRegistry()
+	recorder := metrics.NewRecorder(reg)
+
 	provider := llm.NewOllamaProvider(cfg.OllamaBaseURL, cfg.OllamaModel, nil, logger)
-	orchestrator := review.NewOrchestrator(provider, ghClient, logger)
+	orchestrator := review.NewOrchestrator(provider, ghClient, logger, recorder)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health.Handler)
+	mux.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 	mux.Handle("POST /webhooks/github", webhook.NewHandler(cfg.GitHubWebhookSecret, orchestrator, logger))
 
 	srv := &http.Server{
