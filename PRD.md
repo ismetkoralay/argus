@@ -10,7 +10,10 @@ Pull request review is a bottleneck on almost every team. Reviews are slow, inco
 
 Argus automates that mechanical first pass. It is **not** a replacement for human review — it is the reviewer that always shows up, never gets tired, and catches the obvious stuff before a human spends time on it.
 
-This project is a strong portfolio piece and is designed to run on a local by mimicing a real kubernetes environment.
+This project is a strong portfolio piece because:
+- It is a **real, installable GitHub App** (webhooks, App auth, the GitHub API) — recruiters recognize this immediately.
+- It is **contained in scope** but touches event-driven architecture, third-party API integration, and LLM orchestration.
+- It demonstrates **AI product sense**, not just "I called an LLM".
 
 ## 2. Goals & Non-Goals
 
@@ -35,7 +38,7 @@ This project is a strong portfolio piece and is designed to run on a local by mi
 | Solo OSS maintainer | Gets help triaging drive-by contributor PRs. |
 | Individual learning | Self-reviews their own PRs before asking a human. |
 
-**Primary scenario:** A developer opens a PR. Within a reasonable time Argus posts a summary ("3 issues found: 1 potential bug, 2 style") and 3 inline comments. The developer fixes two, pushes. Argus re-reviews and resolves its stance.
+**Primary scenario:** A developer opens a PR. Within ~30s Argus posts a summary ("3 issues found: 1 potential bug, 2 style") and 3 inline comments. The developer fixes two, pushes. Argus re-reviews and resolves its stance.
 
 ## 4. Functional Requirements
 
@@ -98,4 +101,3 @@ This project is a strong portfolio piece and is designed to run on a local by mi
 ## 9. Open Questions
 - Inline-comment anchoring against the diff position can be fiddly with the GitHub API — validate the approach early in M1.
 - Should very large PRs be summarized at a higher level instead of per-line? (Likely yes, gate behind a line-count threshold.)
-- Exact-match dedup (file+line, see README) can't catch the same finding reworded or re-anchored to a nearby line across review runs — semantic/fuzzy dedup would close this but is a bigger lift than M2's scope; revisit for M4 if repost noise shows up in practice.

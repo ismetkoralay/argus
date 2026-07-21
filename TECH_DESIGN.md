@@ -14,7 +14,7 @@
 | LLM (local) | **Ollama** (e.g. `qwen2.5-coder`, `llama3.1`) | Runs free on localhost; good at code. |
 | Persistence (optional) | **Postgres** | Only if review-history/feedback is enabled (M4). |
 | Cache / dedup | **Redis** | Delivery-ID dedup, simple rate limiting. |
-| Deploy | Docker + k8s manifests, **kind** | No cloud cost. |
+| Deploy | Docker + k8s manifests, **kind** | No cloud cost; lighter than minikube (runs nodes as containers). |
 | Local webhook tunnel | `smee.io` client or `cloudflared` | Expose localhost to GitHub during dev. |
 
 ## 2. High-Level Architecture
@@ -116,6 +116,9 @@ Default build keeps Argus **stateless** apart from Redis dedup keys.
 ## 6. Deployment (kind)
 - Multi-stage `Dockerfile` → tiny distroless image.
 - `k8s/`: `Deployment`, `Service`, `Secret` (app id, private key, webhook secret), optional `Ingress`.
+- Flow: `kind create cluster --name dev` → `docker build -t argus:latest .` → `kind load docker-image argus:latest --name dev` → `kubectl apply -k k8s/`.
+- **Note:** kind does not share the host Docker daemon, so images must be explicitly loaded with `kind load docker-image` after each rebuild (then `kubectl rollout restart` to pick them up). Manifests use `imagePullPolicy: IfNotPresent` so the loaded local image is used.
+- For live GitHub delivery, `kubectl port-forward` the service and point the smee/cloudflared tunnel at that local port.
 
 ## 7. Observability
 - Structured JSON logs (zerolog/slog) with delivery ID + repo + PR as fields.
