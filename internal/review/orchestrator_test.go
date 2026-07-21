@@ -10,7 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/ismetkoralay/argus/internal/githubapp"
+	"github.com/ismetkoralay/argus/internal/metrics"
 	"github.com/ismetkoralay/argus/internal/repoconfig"
 )
 
@@ -79,7 +83,7 @@ func TestOrchestrator_ReviewPR_Aggregation(t *testing.T) {
 		return []Finding{{File: unit.File, Line: 1, Severity: "error", Category: "bug", Message: "bug in " + unit.File}}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -107,7 +111,7 @@ func TestOrchestrator_ReviewPR_SeverityFloorKeepsEverythingAtOrAboveFloor(t *tes
 		t.Fatalf("default min_severity is %q, but this test assumes info is at or above the floor", repoconfig.Default.MinSeverity)
 	}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -129,7 +133,7 @@ func TestOrchestrator_ReviewPR_CapsCommentCount(t *testing.T) {
 		return []Finding{{File: unit.File, Line: 1, Severity: "warning", Category: "style", Message: "finding"}}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -163,7 +167,7 @@ func TestOrchestrator_ReviewPR_BoundsConcurrency(t *testing.T) {
 		return nil, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -185,7 +189,7 @@ func TestOrchestrator_ReviewPR_SkipsUnitOnProviderError(t *testing.T) {
 		return []Finding{{File: unit.File, Line: 1, Severity: "error", Category: "bug", Message: "bug in " + unit.File}}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error (unit errors should be logged and skipped, not fatal): %v", err)
 	}
@@ -201,7 +205,7 @@ func TestOrchestrator_ReviewPR_NoFindingsSkipsReviewButPostsSummary(t *testing.T
 	gh := &fakeGithubClient{files: []githubapp.PRFile{patchFile("a.go", 1)}}
 	provider := &FakeProvider{Findings: nil}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -227,7 +231,7 @@ func TestOrchestrator_ReviewPR_ConfigMinSeverityRaisesFloor(t *testing.T) {
 		{File: "a.go", Line: 2, Severity: "error", Category: "bug", Message: "above new floor"},
 	}}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -250,7 +254,7 @@ func TestOrchestrator_ReviewPR_ConfigCategoriesFiltersFindings(t *testing.T) {
 		{File: "a.go", Line: 2, Severity: "error", Category: "bug", Message: "bug finding"},
 	}}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -272,7 +276,7 @@ func TestOrchestrator_ReviewPR_ConfigIgnoreDropsFiles(t *testing.T) {
 		return []Finding{{File: unit.File, Line: 1, Severity: "error", Category: "bug", Message: "bug in " + unit.File}}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -298,7 +302,7 @@ func TestOrchestrator_ReviewPR_ConfigMaxFilesCapsFilesReviewed(t *testing.T) {
 		return []Finding{{File: unit.File, Line: 1, Severity: "error", Category: "bug", Message: "bug"}}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -327,7 +331,7 @@ func TestOrchestrator_ReviewPR_ConfigMaxCommentsOverridesCap(t *testing.T) {
 		return []Finding{{File: unit.File, Line: 1, Severity: "warning", Category: "style", Message: "finding"}}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -347,7 +351,7 @@ func TestOrchestrator_ReviewPR_ConfigPersonaThreadedToProvider(t *testing.T) {
 	}
 	provider := &FakeProvider{}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -367,7 +371,7 @@ func TestOrchestrator_ReviewPR_MalformedConfigFallsBackToDefaults(t *testing.T) 
 		{File: "a.go", Line: 1, Severity: "info", Category: "style", Message: "info finding"},
 	}}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -385,7 +389,7 @@ func TestOrchestrator_ReviewPR_Dedup_FirstReviewPostsEverything(t *testing.T) {
 		return []Finding{{File: unit.File, Line: 1, Severity: "error", Category: "bug", Message: "bug in " + unit.File}}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -414,7 +418,7 @@ func TestOrchestrator_ReviewPR_Dedup_IdenticalReReviewPostsNothing(t *testing.T)
 		return []Finding{findingB}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -442,7 +446,7 @@ func TestOrchestrator_ReviewPR_Dedup_OnlyNewFindingIsPosted(t *testing.T) {
 		return []Finding{newFindingB}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -463,7 +467,7 @@ func TestOrchestrator_ReviewPRByNumber_ResolvesHeadSHAAndReviews(t *testing.T) {
 		{File: "a.go", Line: 1, Severity: "error", Category: "bug", Message: "a bug"},
 	}}
 
-	o := NewOrchestrator(provider, gh, nil)
+	o := NewOrchestrator(provider, gh, nil, nil)
 	if err := o.ReviewPRByNumber(context.Background(), 42, "octo-org", "octo-repo", 7); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -480,9 +484,80 @@ func TestOrchestrator_ReviewPRByNumber_ResolvesHeadSHAAndReviews(t *testing.T) {
 
 func TestOrchestrator_ReviewPRByNumber_PropagatesHeadSHALookupError(t *testing.T) {
 	gh := &fakeGithubClient{headSHAErr: errors.New("boom")}
-	o := NewOrchestrator(&FakeProvider{}, gh, nil)
+	o := NewOrchestrator(&FakeProvider{}, gh, nil, nil)
 
 	if err := o.ReviewPRByNumber(context.Background(), 42, "octo-org", "octo-repo", 7); err == nil {
 		t.Fatal("expected error when head SHA lookup fails, got nil")
+	}
+}
+
+// TestOrchestrator_ReviewPR_RecordsMetrics drives a review through
+// FakeProvider (one unit erroring, one returning two findings across
+// categories) against a real metrics.Recorder on an isolated registry, and
+// asserts all four TECH_DESIGN.md §7 series move as expected.
+func TestOrchestrator_ReviewPR_RecordsMetrics(t *testing.T) {
+	gh := &fakeGithubClient{files: []githubapp.PRFile{patchFile("a.go", 1), patchFile("b.go", 2)}}
+	provider := &FakeProvider{FindingsFunc: func(unit DiffUnit) ([]Finding, error) {
+		if unit.File == "a.go" {
+			return nil, errors.New("boom")
+		}
+		return []Finding{
+			{File: unit.File, Line: 1, Severity: "error", Category: "bug", Message: "bug in " + unit.File},
+			{File: unit.File, Line: 2, Severity: "warning", Category: "style", Message: "style nit in " + unit.File},
+		}, nil
+	}}
+
+	reg := prometheus.NewRegistry()
+	rec := metrics.NewRecorder(reg)
+	o := NewOrchestrator(provider, gh, nil, rec)
+
+	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	assertMetric := func(name, expected string) {
+		t.Helper()
+		if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), name); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+
+	assertMetric("argus_reviews_total", `
+# HELP argus_reviews_total Total number of pull request reviews processed.
+# TYPE argus_reviews_total counter
+argus_reviews_total 1
+`)
+	assertMetric("argus_findings_total", `
+# HELP argus_findings_total Total number of findings posted, by category.
+# TYPE argus_findings_total counter
+argus_findings_total{category="bug"} 1
+argus_findings_total{category="style"} 1
+`)
+	assertMetric("argus_llm_errors_total", `
+# HELP argus_llm_errors_total Total number of LLM provider errors encountered while reviewing diff units.
+# TYPE argus_llm_errors_total counter
+argus_llm_errors_total 1
+`)
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	var sampleCount uint64
+	found := false
+	for _, mf := range families {
+		if mf.GetName() != "argus_review_duration_seconds" {
+			continue
+		}
+		found = true
+		if len(mf.GetMetric()) == 1 {
+			sampleCount = mf.GetMetric()[0].GetHistogram().GetSampleCount()
+		}
+	}
+	if !found {
+		t.Fatal("argus_review_duration_seconds not found")
+	}
+	if sampleCount != 1 {
+		t.Fatalf("argus_review_duration_seconds sample count = %d, want 1 (one ReviewPR call)", sampleCount)
 	}
 }

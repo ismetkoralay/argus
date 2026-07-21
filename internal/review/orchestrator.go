@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ismetkoralay/argus/internal/githubapp"
 	"github.com/ismetkoralay/argus/internal/logging"
@@ -35,27 +36,62 @@ type GithubClient interface {
 	UpsertSummaryComment(ctx context.Context, installationID int64, owner, repo string, prNumber int, body string) error
 }
 
+// Metrics records the review-path observability series described in
+// TECH_DESIGN.md §7. Defined here (the consumer) and implemented by
+// internal/metrics (the provider), per this repo's interfaces-at-the-
+// consumer convention.
+type Metrics interface {
+	// ReviewCompleted records that a review finished, successfully or not,
+	// and how long it took.
+	ReviewCompleted(duration time.Duration)
+	// FindingPosted records one finding actually posted to a pull request,
+	// by its category.
+	FindingPosted(category string)
+	// LLMError records a provider error encountered while reviewing a
+	// diff unit.
+	LLMError()
+}
+
+// noopMetrics is the default Metrics used when NewOrchestrator is given
+// nil, so callers that don't care about metrics (most existing tests)
+// don't need a fake.
+type noopMetrics struct{}
+
+func (noopMetrics) ReviewCompleted(time.Duration) {}
+func (noopMetrics) FindingPosted(string)          {}
+func (noopMetrics) LLMError()                     {}
+
 // Orchestrator fans a PR's diff out to a Provider, aggregates the
 // findings, and posts them as a GitHub review plus a summary comment.
 type Orchestrator struct {
 	provider Provider
 	github   GithubClient
 	logger   *slog.Logger
+	metrics  Metrics
 }
 
 // NewOrchestrator builds an Orchestrator. logger defaults to slog.Default()
-// when nil.
-func NewOrchestrator(provider Provider, github GithubClient, logger *slog.Logger) *Orchestrator {
+// when nil; metrics defaults to a no-op when nil.
+func NewOrchestrator(provider Provider, github GithubClient, logger *slog.Logger, metrics Metrics) *Orchestrator {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Orchestrator{provider: provider, github: github, logger: logger}
+	if metrics == nil {
+		metrics = noopMetrics{}
+	}
+	return &Orchestrator{provider: provider, github: github, logger: logger, metrics: metrics}
 }
 
 // ReviewPR fetches the PR's diff, reviews it, and posts inline comments
 // plus a summary comment. Provider errors on individual units are logged
 // and skipped rather than failing the whole review.
 func (o *Orchestrator) ReviewPR(ctx context.Context, installationID int64, owner, repo string, prNumber int, headSHA string) error {
+	// Fires exactly once per invocation regardless of exit path (success or
+	// an early error), matching "reviews processed" semantics and giving an
+	// accurate latency reading even on fast failures.
+	start := time.Now()
+	defer func() { o.metrics.ReviewCompleted(time.Since(start)) }()
+
 	// Enrich the context logger with this review's correlation fields. This
 	// is the one place both call paths (direct PR event, /argus review)
 	// converge with all three values guaranteed present, so every log line
@@ -90,6 +126,7 @@ func (o *Orchestrator) ReviewPR(ctx context.Context, installationID int64, owner
 	if len(findings) > 0 {
 		comments := make([]githubapp.InlineComment, 0, len(findings))
 		for _, f := range findings {
+			o.metrics.FindingPosted(f.Category)
 			comments = append(comments, githubapp.InlineComment{Path: f.File, Line: f.Line, Body: withFindingMarker(formatFindingBody(f), f)})
 		}
 		if err := o.github.CreateReview(ctx, installationID, owner, repo, prNumber, headSHA, comments, "COMMENT", ""); err != nil {
@@ -183,6 +220,7 @@ func (o *Orchestrator) reviewUnits(ctx context.Context, units []DiffUnit, person
 			unitFindings, err := o.provider.Review(ctx, unit, Config{Persona: persona})
 			if err != nil {
 				logging.FromContext(ctx, o.logger).Error("skipping diff unit after provider error", "err", err, "file", unit.File)
+				o.metrics.LLMError()
 				return
 			}
 			mu.Lock()
