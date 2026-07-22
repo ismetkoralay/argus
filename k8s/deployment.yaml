@@ -17,6 +17,7 @@ spec:
           imagePullPolicy: IfNotPresent   # use locally-built image (kind)
           ports: [{ containerPort: 8080 }]
           envFrom:
+            - configMapRef: { name: argus-config }
             - secretRef: { name: argus-secrets }
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }

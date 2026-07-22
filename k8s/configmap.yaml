@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argus-config
+data:
+  # host.docker.internal resolves to the host machine, where `ollama serve`
+  # is expected to be running (see TECH_DESIGN.md §5) — the pod's own
+  # localhost is not the host's. Verified against a local kind cluster:
+  # this resolves and is reachable from a pod with no extra CoreDNS setup.
+  OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+  OLLAMA_MODEL: "qwen2.5-coder"
+  LOG_LEVEL: "info"
+  # PORT is deliberately not set here: deployment.yaml's containerPort and
+  # service.yaml's targetPort both hardcode 8080. Overriding it only here
+  # would silently break routing; leave it to Config's own default instead.
