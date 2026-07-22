@@ -58,6 +58,42 @@ func TestNew_LevelGatesVerboseLogging(t *testing.T) {
 	}
 }
 
+func TestParseLevel(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    slog.Level
+		wantErr bool
+	}{
+		{"", slog.LevelInfo, false},
+		{"debug", slog.LevelDebug, false},
+		{"DEBUG", slog.LevelDebug, false},
+		{"info", slog.LevelInfo, false},
+		{"warn", slog.LevelWarn, false},
+		{"warning", slog.LevelWarn, false},
+		{"error", slog.LevelError, false},
+		{"not-a-real-level", 0, true},
+		{"trace", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := ParseLevel(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ParseLevel(%q) = %v, nil; want an error", tt.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseLevel(%q) returned unexpected error: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Fatalf("ParseLevel(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNew_UnrecognizedLevelDefaultsToInfo(t *testing.T) {
 	var buf bytes.Buffer
 	logger := New("not-a-real-level", &buf)
