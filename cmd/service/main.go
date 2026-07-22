@@ -24,16 +24,18 @@ import (
 )
 
 func main() {
-	// Read directly from the environment (not config.Config): the logger
-	// must exist before config.Load() runs so a config-validation failure
-	// itself can be logged.
-	logger := logging.New(os.Getenv("LOG_LEVEL"), os.Stdout)
+	// A default-level logger to report a config-load failure with (LOG_LEVEL
+	// itself is one of the things config.Load() validates, so it can't
+	// shape the logger used to report that it's invalid). Rebuilt below at
+	// the operator's requested level once config.Load() succeeds.
+	logger := logging.New("", os.Stdout)
 
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Error("failed to load config", "err", err)
 		os.Exit(1)
 	}
+	logger = logging.New(cfg.LogLevel, os.Stdout)
 
 	ghClient, err := githubapp.New(cfg.GitHubAppID, cfg.GitHubPrivateKeyPEM)
 	if err != nil {

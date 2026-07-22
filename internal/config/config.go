@@ -5,9 +5,12 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/ismetkoralay/argus/internal/logging"
 )
 
 // Config holds the runtime configuration for the service.
@@ -18,6 +21,7 @@ type Config struct {
 	GitHubWebhookSecret []byte
 	OllamaBaseURL       string
 	OllamaModel         string
+	LogLevel            string
 }
 
 // Load reads configuration from the process environment, returning an error
@@ -30,6 +34,9 @@ func Load() (Config, error) {
 	appID, err := strconv.ParseInt(appIDRaw, 10, 64)
 	if err != nil {
 		return Config{}, fmt.Errorf("parse GITHUB_APP_ID: %w", err)
+	}
+	if appID <= 0 {
+		return Config{}, fmt.Errorf("invalid GITHUB_APP_ID %q: must be a positive integer", appIDRaw)
 	}
 
 	privateKey, err := requireEnv("GITHUB_APP_PRIVATE_KEY")
@@ -49,15 +56,26 @@ func Load() (Config, error) {
 	if port == "" {
 		port = "8080"
 	}
+	if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+		return Config{}, fmt.Errorf("invalid PORT %q: must be an integer between 1 and 65535", port)
+	}
 
 	ollamaBaseURL := os.Getenv("OLLAMA_BASE_URL")
 	if ollamaBaseURL == "" {
 		ollamaBaseURL = "http://localhost:11434"
 	}
+	if u, err := url.Parse(ollamaBaseURL); err != nil || u.Scheme == "" || u.Host == "" {
+		return Config{}, fmt.Errorf("invalid OLLAMA_BASE_URL %q: must be an absolute http(s) URL", ollamaBaseURL)
+	}
 
 	ollamaModel := os.Getenv("OLLAMA_MODEL")
 	if ollamaModel == "" {
 		ollamaModel = "qwen2.5-coder"
+	}
+
+	logLevel := os.Getenv("LOG_LEVEL")
+	if _, err := logging.ParseLevel(logLevel); err != nil {
+		return Config{}, fmt.Errorf("invalid LOG_LEVEL: %w", err)
 	}
 
 	return Config{
@@ -67,6 +85,7 @@ func Load() (Config, error) {
 		GitHubWebhookSecret: []byte(webhookSecret),
 		OllamaBaseURL:       ollamaBaseURL,
 		OllamaModel:         ollamaModel,
+		LogLevel:            logLevel,
 	}, nil
 }
 
