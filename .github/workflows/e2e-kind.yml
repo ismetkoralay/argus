@@ -16,9 +16,10 @@ jobs:
 
       - name: Create kind cluster
         uses: helm/kind-action@v1
+        with: { cluster_name: argus }
 
       - name: Load image into kind
-        run: kind load docker-image argus:latest --name chart-testing
+        run: kind load docker-image argus:latest --name argus
 
       - name: Create test secret
         # Generated fresh each run so no key material is ever committed to the
@@ -36,8 +37,9 @@ jobs:
           kubectl apply -k k8s/
           kubectl rollout status deployment/argus --timeout=120s
 
-      - name: Smoke test /healthz
+      - name: Smoke test /healthz and /metrics
         run: |
           kubectl port-forward svc/argus 8080:8080 >/dev/null 2>&1 &
           sleep 5
           curl -fsS http://localhost:8080/healthz
+          curl -fsS http://localhost:8080/metrics | grep -q argus_reviews_total
