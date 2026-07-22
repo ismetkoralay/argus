@@ -7,6 +7,7 @@ package logging
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -30,26 +31,41 @@ var sensitiveKeySubstrings = []string{
 const redacted = "[REDACTED]"
 
 // New builds Argus's structured logger: JSON output to w, level parsed from
-// level ("debug", "info", "warn"/"warning", "error"; anything else,
-// including empty, defaults to info), with the redaction guard applied.
+// level via ParseLevel (anything ParseLevel rejects, including empty,
+// defaults to info here — New is the lenient, always-succeeds constructor;
+// callers that want to fail fast on a typo'd level should validate it with
+// ParseLevel themselves first, as internal/config does), with the redaction
+// guard applied.
 func New(level string, w io.Writer) *slog.Logger {
+	parsed, err := ParseLevel(level)
+	if err != nil {
+		parsed = slog.LevelInfo
+	}
 	handler := slog.NewJSONHandler(w, &slog.HandlerOptions{
-		Level:       parseLevel(level),
+		Level:       parsed,
 		ReplaceAttr: redactAttr,
 	})
 	return slog.New(handler)
 }
 
-func parseLevel(level string) slog.Level {
+// ParseLevel parses a LOG_LEVEL value: "debug", "info", "warn"/"warning",
+// "error" (case-insensitive), or "" (info). Anything else is an error, so
+// callers that need to fail fast on a misconfigured level (rather than New's
+// silent fallback) can do so with a clear message.
+func ParseLevel(level string) (slog.Level, error) {
 	switch strings.ToLower(level) {
+	case "":
+		return slog.LevelInfo, nil
 	case "debug":
-		return slog.LevelDebug
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
 	case "warn", "warning":
-		return slog.LevelWarn
+		return slog.LevelWarn, nil
 	case "error":
-		return slog.LevelError
+		return slog.LevelError, nil
 	default:
-		return slog.LevelInfo
+		return 0, fmt.Errorf("must be one of debug, info, warn, error (got %q)", level)
 	}
 }
 
