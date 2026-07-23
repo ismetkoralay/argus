@@ -22,6 +22,10 @@ type Config struct {
 	OllamaBaseURL       string
 	OllamaModel         string
 	LogLevel            string
+	// DatabaseURL enables optional Postgres review-history persistence
+	// (see internal/history) when set. Empty is valid and means the
+	// feature is off; Argus runs exactly as it does with no database.
+	DatabaseURL string
 }
 
 // Load reads configuration from the process environment, returning an error
@@ -78,6 +82,16 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("invalid LOG_LEVEL: %w", err)
 	}
 
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL != "" {
+		// The value itself is never included in the error (it carries a
+		// password) — main.go logs config-load errors verbatim.
+		u, err := url.Parse(databaseURL)
+		if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Host == "" {
+			return Config{}, fmt.Errorf("invalid DATABASE_URL: must be a postgres:// or postgresql:// URL")
+		}
+	}
+
 	return Config{
 		Port:                port,
 		GitHubAppID:         appID,
@@ -86,6 +100,7 @@ func Load() (Config, error) {
 		OllamaBaseURL:       ollamaBaseURL,
 		OllamaModel:         ollamaModel,
 		LogLevel:            logLevel,
+		DatabaseURL:         databaseURL,
 	}, nil
 }
 

@@ -68,18 +68,22 @@ type Orchestrator struct {
 	github   GithubClient
 	logger   *slog.Logger
 	metrics  Metrics
+	history  HistoryStore
 }
 
 // NewOrchestrator builds an Orchestrator. logger defaults to slog.Default()
-// when nil; metrics defaults to a no-op when nil.
-func NewOrchestrator(provider Provider, github GithubClient, logger *slog.Logger, metrics Metrics) *Orchestrator {
+// when nil; metrics and history default to no-ops when nil.
+func NewOrchestrator(provider Provider, github GithubClient, logger *slog.Logger, metrics Metrics, history HistoryStore) *Orchestrator {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	if metrics == nil {
 		metrics = noopMetrics{}
 	}
-	return &Orchestrator{provider: provider, github: github, logger: logger, metrics: metrics}
+	if history == nil {
+		history = noopHistoryStore{}
+	}
+	return &Orchestrator{provider: provider, github: github, logger: logger, metrics: metrics, history: history}
 }
 
 // ReviewPR fetches the PR's diff, reviews it, and posts inline comments
@@ -138,7 +142,25 @@ func (o *Orchestrator) ReviewPR(ctx context.Context, installationID int64, owner
 	if err := o.github.UpsertSummaryComment(ctx, installationID, owner, repo, prNumber, summary); err != nil {
 		return fmt.Errorf("upsert summary comment: %w", err)
 	}
+
+	o.saveHistory(ctx, owner, repo, prNumber, headSHA, findings, time.Since(start))
 	return nil
+}
+
+// saveHistory persists the completed review via the configured HistoryStore.
+// It is best-effort: a persistence failure is logged and otherwise ignored,
+// never turning a successful review into a failed one.
+func (o *Orchestrator) saveHistory(ctx context.Context, owner, repo string, prNumber int, headSHA string, findings []Finding, latency time.Duration) {
+	rec := Record{
+		Repo:          owner + "/" + repo,
+		PRNumber:      prNumber,
+		HeadSHA:       headSHA,
+		FindingsCount: len(findings),
+		LatencyMS:     latency.Milliseconds(),
+	}
+	if err := o.history.SaveReview(ctx, rec, findings); err != nil {
+		logging.FromContext(ctx, o.logger).Warn("failed to persist review history", "err", err)
+	}
 }
 
 // ReviewPRByNumber resolves the PR's current head SHA and runs the same

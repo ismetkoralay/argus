@@ -16,6 +16,7 @@ import (
 	"github.com/ismetkoralay/argus/internal/config"
 	"github.com/ismetkoralay/argus/internal/githubapp"
 	"github.com/ismetkoralay/argus/internal/health"
+	"github.com/ismetkoralay/argus/internal/history"
 	"github.com/ismetkoralay/argus/internal/llm"
 	"github.com/ismetkoralay/argus/internal/logging"
 	"github.com/ismetkoralay/argus/internal/metrics"
@@ -46,8 +47,28 @@ func main() {
 	reg := prometheus.NewRegistry()
 	recorder := metrics.NewRecorder(reg)
 
+	// Review history is optional: enabled only when DATABASE_URL is set. A
+	// misconfigured value here is a real config error (the operator opted
+	// in explicitly), so it fails startup rather than silently degrading —
+	// unlike a persistence failure mid-review, which orchestrator.go logs
+	// and continues past.
+	var reviewHistory review.HistoryStore
+	var historyStore *history.Store
+	if cfg.DatabaseURL != "" {
+		s, err := history.New(context.Background(), cfg.DatabaseURL)
+		if err != nil {
+			logger.Error("failed to initialize review history store", "err", err)
+			os.Exit(1)
+		}
+		historyStore = s
+		reviewHistory = s
+		logger.Info("review history: enabled")
+	} else {
+		logger.Info("review history: disabled (no DATABASE_URL)")
+	}
+
 	provider := llm.NewOllamaProvider(cfg.OllamaBaseURL, cfg.OllamaModel, nil, logger)
-	orchestrator := review.NewOrchestrator(provider, ghClient, logger, recorder)
+	orchestrator := review.NewOrchestrator(provider, ghClient, logger, recorder, reviewHistory)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health.Handler)
@@ -77,5 +98,12 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "err", err)
 	}
+
+	if historyStore != nil {
+		if err := historyStore.Close(); err != nil {
+			logger.Error("failed to close review history store", "err", err)
+		}
+	}
+
 	logger.Info("server stopped")
 }

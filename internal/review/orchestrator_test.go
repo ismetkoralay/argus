@@ -73,6 +73,23 @@ func (f *fakeGithubClient) UpsertSummaryComment(_ context.Context, _ int64, _, _
 	return f.upsertSummaryErr
 }
 
+type fakeHistoryStore struct {
+	mu       sync.Mutex
+	called   bool
+	rec      Record
+	findings []Finding
+	err      error
+}
+
+func (f *fakeHistoryStore) SaveReview(_ context.Context, rec Record, findings []Finding) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.called = true
+	f.rec = rec
+	f.findings = findings
+	return f.err
+}
+
 func patchFile(name string, n int) githubapp.PRFile {
 	return githubapp.PRFile{Filename: name, Patch: fmt.Sprintf("@@ -1,1 +1,%d @@\n+line%d", n, n), Status: "modified"}
 }
@@ -83,7 +100,7 @@ func TestOrchestrator_ReviewPR_Aggregation(t *testing.T) {
 		return []Finding{{File: unit.File, Line: 1, Severity: "error", Category: "bug", Message: "bug in " + unit.File}}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -111,7 +128,7 @@ func TestOrchestrator_ReviewPR_SeverityFloorKeepsEverythingAtOrAboveFloor(t *tes
 		t.Fatalf("default min_severity is %q, but this test assumes info is at or above the floor", repoconfig.Default.MinSeverity)
 	}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -133,7 +150,7 @@ func TestOrchestrator_ReviewPR_CapsCommentCount(t *testing.T) {
 		return []Finding{{File: unit.File, Line: 1, Severity: "warning", Category: "style", Message: "finding"}}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -167,7 +184,7 @@ func TestOrchestrator_ReviewPR_BoundsConcurrency(t *testing.T) {
 		return nil, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -189,7 +206,7 @@ func TestOrchestrator_ReviewPR_SkipsUnitOnProviderError(t *testing.T) {
 		return []Finding{{File: unit.File, Line: 1, Severity: "error", Category: "bug", Message: "bug in " + unit.File}}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error (unit errors should be logged and skipped, not fatal): %v", err)
 	}
@@ -205,7 +222,7 @@ func TestOrchestrator_ReviewPR_NoFindingsSkipsReviewButPostsSummary(t *testing.T
 	gh := &fakeGithubClient{files: []githubapp.PRFile{patchFile("a.go", 1)}}
 	provider := &FakeProvider{Findings: nil}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -231,7 +248,7 @@ func TestOrchestrator_ReviewPR_ConfigMinSeverityRaisesFloor(t *testing.T) {
 		{File: "a.go", Line: 2, Severity: "error", Category: "bug", Message: "above new floor"},
 	}}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -254,7 +271,7 @@ func TestOrchestrator_ReviewPR_ConfigCategoriesFiltersFindings(t *testing.T) {
 		{File: "a.go", Line: 2, Severity: "error", Category: "bug", Message: "bug finding"},
 	}}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -276,7 +293,7 @@ func TestOrchestrator_ReviewPR_ConfigIgnoreDropsFiles(t *testing.T) {
 		return []Finding{{File: unit.File, Line: 1, Severity: "error", Category: "bug", Message: "bug in " + unit.File}}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -302,7 +319,7 @@ func TestOrchestrator_ReviewPR_ConfigMaxFilesCapsFilesReviewed(t *testing.T) {
 		return []Finding{{File: unit.File, Line: 1, Severity: "error", Category: "bug", Message: "bug"}}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -331,7 +348,7 @@ func TestOrchestrator_ReviewPR_ConfigMaxCommentsOverridesCap(t *testing.T) {
 		return []Finding{{File: unit.File, Line: 1, Severity: "warning", Category: "style", Message: "finding"}}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -351,7 +368,7 @@ func TestOrchestrator_ReviewPR_ConfigPersonaThreadedToProvider(t *testing.T) {
 	}
 	provider := &FakeProvider{}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -371,7 +388,7 @@ func TestOrchestrator_ReviewPR_MalformedConfigFallsBackToDefaults(t *testing.T) 
 		{File: "a.go", Line: 1, Severity: "info", Category: "style", Message: "info finding"},
 	}}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -389,7 +406,7 @@ func TestOrchestrator_ReviewPR_Dedup_FirstReviewPostsEverything(t *testing.T) {
 		return []Finding{{File: unit.File, Line: 1, Severity: "error", Category: "bug", Message: "bug in " + unit.File}}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -418,7 +435,7 @@ func TestOrchestrator_ReviewPR_Dedup_IdenticalReReviewPostsNothing(t *testing.T)
 		return []Finding{findingB}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -446,7 +463,7 @@ func TestOrchestrator_ReviewPR_Dedup_OnlyNewFindingIsPosted(t *testing.T) {
 		return []Finding{newFindingB}, nil
 	}}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -467,7 +484,7 @@ func TestOrchestrator_ReviewPRByNumber_ResolvesHeadSHAAndReviews(t *testing.T) {
 		{File: "a.go", Line: 1, Severity: "error", Category: "bug", Message: "a bug"},
 	}}
 
-	o := NewOrchestrator(provider, gh, nil, nil)
+	o := NewOrchestrator(provider, gh, nil, nil, nil)
 	if err := o.ReviewPRByNumber(context.Background(), 42, "octo-org", "octo-repo", 7); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -484,7 +501,7 @@ func TestOrchestrator_ReviewPRByNumber_ResolvesHeadSHAAndReviews(t *testing.T) {
 
 func TestOrchestrator_ReviewPRByNumber_PropagatesHeadSHALookupError(t *testing.T) {
 	gh := &fakeGithubClient{headSHAErr: errors.New("boom")}
-	o := NewOrchestrator(&FakeProvider{}, gh, nil, nil)
+	o := NewOrchestrator(&FakeProvider{}, gh, nil, nil, nil)
 
 	if err := o.ReviewPRByNumber(context.Background(), 42, "octo-org", "octo-repo", 7); err == nil {
 		t.Fatal("expected error when head SHA lookup fails, got nil")
@@ -509,7 +526,7 @@ func TestOrchestrator_ReviewPR_RecordsMetrics(t *testing.T) {
 
 	reg := prometheus.NewRegistry()
 	rec := metrics.NewRecorder(reg)
-	o := NewOrchestrator(provider, gh, nil, rec)
+	o := NewOrchestrator(provider, gh, nil, rec, nil)
 
 	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -559,5 +576,86 @@ argus_llm_errors_total 1
 	}
 	if sampleCount != 1 {
 		t.Fatalf("argus_review_duration_seconds sample count = %d, want 1 (one ReviewPR call)", sampleCount)
+	}
+}
+
+func TestOrchestrator_ReviewPR_SavesHistoryOnSuccess(t *testing.T) {
+	gh := &fakeGithubClient{files: []githubapp.PRFile{patchFile("a.go", 1)}}
+	provider := &FakeProvider{Findings: []Finding{
+		{File: "a.go", Line: 1, Severity: "error", Category: "bug", Message: "a bug"},
+	}}
+	history := &fakeHistoryStore{}
+
+	o := NewOrchestrator(provider, gh, nil, nil, history)
+	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	history.mu.Lock()
+	defer history.mu.Unlock()
+	if !history.called {
+		t.Fatal("expected SaveReview to be called after a successful review")
+	}
+	want := Record{Repo: "octo-org/octo-repo", PRNumber: 7, HeadSHA: "deadbeef", FindingsCount: 1}
+	if history.rec.Repo != want.Repo || history.rec.PRNumber != want.PRNumber ||
+		history.rec.HeadSHA != want.HeadSHA || history.rec.FindingsCount != want.FindingsCount {
+		t.Fatalf("got record %+v, want %+v (LatencyMS unchecked)", history.rec, want)
+	}
+	if history.rec.LatencyMS < 0 {
+		t.Fatalf("got negative LatencyMS %d", history.rec.LatencyMS)
+	}
+	if len(history.findings) != 1 || history.findings[0].Message != "a bug" {
+		t.Fatalf("got findings %+v, want the one posted finding", history.findings)
+	}
+}
+
+func TestOrchestrator_ReviewPR_SavesHistoryWithZeroFindings(t *testing.T) {
+	gh := &fakeGithubClient{files: []githubapp.PRFile{patchFile("a.go", 1)}}
+	history := &fakeHistoryStore{}
+
+	o := NewOrchestrator(&FakeProvider{}, gh, nil, nil, history)
+	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	history.mu.Lock()
+	defer history.mu.Unlock()
+	if !history.called {
+		t.Fatal("expected SaveReview to be called even when there are no findings")
+	}
+	if history.rec.FindingsCount != 0 || len(history.findings) != 0 {
+		t.Fatalf("got FindingsCount=%d findings=%+v, want zero", history.rec.FindingsCount, history.findings)
+	}
+}
+
+func TestOrchestrator_ReviewPR_HistorySaveErrorDoesNotFailReview(t *testing.T) {
+	gh := &fakeGithubClient{files: []githubapp.PRFile{patchFile("a.go", 1)}}
+	history := &fakeHistoryStore{err: errors.New("boom")}
+
+	o := NewOrchestrator(&FakeProvider{}, gh, nil, nil, history)
+	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err != nil {
+		t.Fatalf("expected a history save error to be logged and swallowed, got: %v", err)
+	}
+}
+
+func TestOrchestrator_ReviewPR_HistoryNotSavedWhenCreateReviewFails(t *testing.T) {
+	gh := &fakeGithubClient{
+		files:           []githubapp.PRFile{patchFile("a.go", 1)},
+		createReviewErr: errors.New("boom"),
+	}
+	provider := &FakeProvider{Findings: []Finding{
+		{File: "a.go", Line: 1, Severity: "error", Category: "bug", Message: "a bug"},
+	}}
+	history := &fakeHistoryStore{}
+
+	o := NewOrchestrator(provider, gh, nil, nil, history)
+	if err := o.ReviewPR(context.Background(), 42, "octo-org", "octo-repo", 7, "deadbeef"); err == nil {
+		t.Fatal("expected CreateReview's error to propagate")
+	}
+
+	history.mu.Lock()
+	defer history.mu.Unlock()
+	if history.called {
+		t.Fatal("expected SaveReview not to be called when the review wasn't fully posted")
 	}
 }
