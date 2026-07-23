@@ -96,7 +96,7 @@ This project is a strong portfolio piece because:
 | **M1 – Core review (MVP)** | Diff fetch + parse, LLM provider (Ollama), structured findings, inline + summary comments. |
 | **M2 – Config & polish** | `.argus.yml`, severity filtering, dedup on re-review, comment caps, `/argus review` command. |
 | **M3 – Ops** | Dockerfile, k8s manifests, kind deploy, metrics + structured logs, README with demo gif. |
-| **M4 – Stretch** | Optional Postgres review history; CI "check run" status; provider fallback (Bedrock/OpenAI adapter); per-finding 👍/👎 feedback loop. |
+| **M4 – Stretch** | Optional Postgres review history; CI "check run" status; per-finding 👍/👎 feedback loop. |
 
 ## 9. Open Questions
 - Inline-comment anchoring against the diff position can be fiddly with the GitHub API — validate the approach early in M1.
