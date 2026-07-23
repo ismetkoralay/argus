@@ -13,7 +13,34 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5-coder}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Review history is optional (see internal/history); it defaults on
+      # here so `docker compose up` demonstrates it against the postgres
+      # service below. Set DATABASE_URL="" (note: no colon in the default
+      # below, so an explicitly empty value is honored instead of falling
+      # back) to run stateless instead. Fixed dev credentials are fine —
+      # this connection never leaves localhost.
+      - DATABASE_URL=${DATABASE_URL-postgres://argus:argus@postgres:5432/argus?sslmode=disable}
     extra_hosts:
       # host.docker.internal is automatic on Docker Desktop (macOS/Windows);
       # this makes it resolve on Linux Docker too.
       - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=argus
+      - POSTGRES_PASSWORD=argus
+      - POSTGRES_DB=argus
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U argus"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
