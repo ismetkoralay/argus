@@ -6,6 +6,12 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Proves review-history persistence (internal/history) is a true
+        # opt-in: the same manifests must come up clean whether or not
+        # DATABASE_URL is configured. See k8s/postgres.yaml.
+        db: [disabled, enabled]
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -16,10 +22,16 @@ jobs:
 
       - name: Create kind cluster
         uses: helm/kind-action@v1
-        with: { cluster_name: argus }
+        with: { cluster_name: "argus-${{ matrix.db }}" }
 
       - name: Load image into kind
-        run: kind load docker-image argus:latest --name argus
+        run: kind load docker-image argus:latest --name "argus-${{ matrix.db }}"
+
+      - name: Deploy postgres
+        if: matrix.db == 'enabled'
+        run: |
+          kubectl apply -f k8s/postgres.yaml
+          kubectl rollout status deployment/postgres --timeout=120s
 
       - name: Create test secret
         # Generated fresh each run so no key material is ever committed to the
@@ -29,7 +41,8 @@ jobs:
           kubectl create secret generic argus-secrets \
             --from-literal=GITHUB_APP_ID=1 \
             --from-literal=GITHUB_WEBHOOK_SECRET=e2e-test-secret \
-            --from-file=GITHUB_APP_PRIVATE_KEY=/tmp/e2e-app-key.pem
+            --from-file=GITHUB_APP_PRIVATE_KEY=/tmp/e2e-app-key.pem \
+            ${{ matrix.db == 'enabled' && '"--from-literal=DATABASE_URL=postgres://argus:argus@postgres:5432/argus?sslmode=disable"' || '' }}
           rm -f /tmp/e2e-app-key.pem
 
       - name: Deploy manifests
@@ -43,3 +56,11 @@ jobs:
           sleep 5
           curl -fsS http://localhost:8080/healthz
           curl -fsS http://localhost:8080/metrics | grep -q argus_reviews_total
+
+      - name: Verify review history matches this leg's db setting
+        run: |
+          if [ "${{ matrix.db }}" = "enabled" ]; then
+            kubectl logs deployment/argus | grep -qF '"msg":"review history: enabled"'
+          else
+            kubectl logs deployment/argus | grep -qF '"msg":"review history: disabled (no DATABASE_URL)"'
+          fi
