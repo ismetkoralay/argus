@@ -178,11 +178,66 @@ func TestLoad(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "database url unset leaves persistence disabled",
+			env: map[string]string{
+				"GITHUB_APP_ID":          "123",
+				"GITHUB_APP_PRIVATE_KEY": "pem-content",
+				"GITHUB_WEBHOOK_SECRET":  "shh",
+			},
+			want: Config{
+				Port:                "8080",
+				GitHubAppID:         123,
+				GitHubPrivateKeyPEM: []byte("pem-content"),
+				GitHubWebhookSecret: []byte("shh"),
+				OllamaBaseURL:       "http://localhost:11434",
+				OllamaModel:         "qwen2.5-coder",
+				DatabaseURL:         "",
+			},
+		},
+		{
+			name: "database url accepted when set",
+			env: map[string]string{
+				"GITHUB_APP_ID":          "123",
+				"GITHUB_APP_PRIVATE_KEY": "pem-content",
+				"GITHUB_WEBHOOK_SECRET":  "shh",
+				"DATABASE_URL":           "postgres://argus:argus@localhost:5432/argus?sslmode=disable",
+			},
+			want: Config{
+				Port:                "8080",
+				GitHubAppID:         123,
+				GitHubPrivateKeyPEM: []byte("pem-content"),
+				GitHubWebhookSecret: []byte("shh"),
+				OllamaBaseURL:       "http://localhost:11434",
+				OllamaModel:         "qwen2.5-coder",
+				DatabaseURL:         "postgres://argus:argus@localhost:5432/argus?sslmode=disable",
+			},
+		},
+		{
+			name: "invalid database url",
+			env: map[string]string{
+				"GITHUB_APP_ID":          "123",
+				"GITHUB_APP_PRIVATE_KEY": "pem-content",
+				"GITHUB_WEBHOOK_SECRET":  "shh",
+				"DATABASE_URL":           "not-a-url",
+			},
+			wantErr: true,
+		},
+		{
+			name: "database url wrong scheme",
+			env: map[string]string{
+				"GITHUB_APP_ID":          "123",
+				"GITHUB_APP_PRIVATE_KEY": "pem-content",
+				"GITHUB_WEBHOOK_SECRET":  "shh",
+				"DATABASE_URL":           "mysql://argus:argus@localhost:3306/argus",
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, key := range []string{"GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET", "PORT", "OLLAMA_BASE_URL", "OLLAMA_MODEL", "LOG_LEVEL"} {
+			for _, key := range []string{"GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET", "PORT", "OLLAMA_BASE_URL", "OLLAMA_MODEL", "LOG_LEVEL", "DATABASE_URL"} {
 				t.Setenv(key, tt.env[key])
 			}
 
@@ -200,7 +255,7 @@ func TestLoad(t *testing.T) {
 				string(cfg.GitHubPrivateKeyPEM) != string(tt.want.GitHubPrivateKeyPEM) ||
 				string(cfg.GitHubWebhookSecret) != string(tt.want.GitHubWebhookSecret) ||
 				cfg.OllamaBaseURL != tt.want.OllamaBaseURL || cfg.OllamaModel != tt.want.OllamaModel ||
-				cfg.LogLevel != tt.want.LogLevel {
+				cfg.LogLevel != tt.want.LogLevel || cfg.DatabaseURL != tt.want.DatabaseURL {
 				t.Fatalf("got %+v, want %+v", cfg, tt.want)
 			}
 		})
